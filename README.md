@@ -104,10 +104,13 @@ backend/
 ├── package.json          # Project dependencies & scripts
 ├── tsconfig.json         # TypeScript compiler configurations
 └── src/
-    ├── index.ts          # Main Express server entrypoint & middleware mounting
+    ├── app.ts            # Express application setup & middleware/routes mounting
+    ├── index.ts          # Main HTTP server entrypoint & MQTT client bootstrapper
     ├── db.ts             # PostgreSQL pool connection configuration
     ├── mqtt-client.ts    # MQTT client instance, topics handler & redemption logic
     ├── init-db.sql       # Database table schemas, constraints & indexes
+    ├── __tests__/
+    │   └── endpoints.test.ts # Endpoint unit & integration test suite
     ├── middlewares/
     │   └── middleware.ts # Request logger, 404 handler, global error handler
     ├── routes/
@@ -236,6 +239,10 @@ psql -U postgres -d paygo_db -f src/init-db.sql
 - **Development Mode** (Hot Reloading via `tsx`):
   ```bash
   npm run dev
+  ```
+- **Run Endpoint Tests**:
+  ```bash
+  npm test
   ```
 - **Type Checking**:
   ```bash
