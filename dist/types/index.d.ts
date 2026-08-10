@@ -1,3 +1,35 @@
+export interface User {
+    id: number;
+    email: string;
+    phone?: string;
+    role: 'BUYER' | 'OWNER';
+    createdAt: Date;
+}
+export interface RegisterRequest {
+    email: string;
+    password: string;
+    phone?: string;
+    role?: 'BUYER' | 'OWNER';
+}
+export interface LoginRequest {
+    email: string;
+    password: string;
+}
+export interface AuthResponse {
+    success: boolean;
+    token: string;
+    user: {
+        id: number;
+        email: string;
+        phone?: string;
+        role: 'BUYER' | 'OWNER';
+    };
+}
+export interface JwtPayload {
+    userId: number;
+    email: string;
+    role: 'BUYER' | 'OWNER';
+}
 export interface PaygoToken {
     id: number;
     buyerEmail: string;

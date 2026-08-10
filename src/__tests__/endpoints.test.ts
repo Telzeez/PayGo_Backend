@@ -35,6 +35,100 @@ describe('PAYGO API Endpoint Test Suite', () => {
       assert.ok(body.timestamp);
       assert.ok(typeof body.uptime === 'number');
     });
+  // ==========================================
+  // AUTH ENDPOINTS (REGISTER, LOGIN, ME)
+  // ==========================================
+  describe('AUTH ENDPOINTS', () => {
+    it('POST /api/auth/register - should validate missing fields', async () => {
+      const res = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'newbuyer@example.com' }), // missing password
+      });
+
+      assert.equal(res.status, 400);
+      const body = await res.json() as any;
+      assert.equal(body.success, false);
+      assert.equal(body.error, 'Email and password are required');
+    });
+
+    it('POST /api/auth/register - should create user and return JWT token', async () => {
+      const originalQuery = pool.query;
+      const mockUser = {
+        id: 10,
+        email: 'newbuyer@example.com',
+        phone: '08012345678',
+        role: 'BUYER',
+        created_at: new Date().toISOString(),
+      };
+
+      (pool as any).query = async (queryText: string) => {
+        if (queryText.includes('SELECT id FROM users')) {
+          return { rows: [] }; // No existing user
+        }
+        if (queryText.includes('INSERT INTO users')) {
+          return { rows: [mockUser] };
+        }
+        return { rows: [] };
+      };
+
+      try {
+        const res = await fetch(`${baseUrl}/api/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: 'newbuyer@example.com',
+            password: 'securepassword123',
+            phone: '08012345678',
+            role: 'BUYER',
+          }),
+        });
+
+        assert.equal(res.status, 201);
+        const body = await res.json() as any;
+        assert.equal(body.success, true);
+        assert.ok(body.token);
+        assert.equal(body.user.email, 'newbuyer@example.com');
+        assert.equal(body.user.role, 'BUYER');
+      } finally {
+        pool.query = originalQuery;
+      }
+    });
+
+    it('POST /api/auth/login - should authenticate valid user credentials', async () => {
+      const originalQuery = pool.query;
+      const bcrypt = await import('bcrypt');
+      const passwordHash = await bcrypt.hash('securepassword123', 10);
+
+      const mockUser = {
+        id: 10,
+        email: 'newbuyer@example.com',
+        phone: '08012345678',
+        password_hash: passwordHash,
+        role: 'BUYER',
+      };
+
+      (pool as any).query = async () => ({ rows: [mockUser] });
+
+      try {
+        const res = await fetch(`${baseUrl}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: 'newbuyer@example.com',
+            password: 'securepassword123',
+          }),
+        });
+
+        assert.equal(res.status, 200);
+        const body = await res.json() as any;
+        assert.equal(body.success, true);
+        assert.ok(body.token);
+        assert.equal(body.user.email, 'newbuyer@example.com');
+      } finally {
+        pool.query = originalQuery;
+      }
+    });
   });
 
   // ==========================================
@@ -321,4 +415,5 @@ describe('PAYGO API Endpoint Test Suite', () => {
       }
     });
   });
+});
 });

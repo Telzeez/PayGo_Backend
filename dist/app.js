@@ -7,6 +7,7 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const middleware_js_1 = require("./middlewares/middleware.js");
+const auth_js_1 = __importDefault(require("./routes/auth.js"));
 const webhook_js_1 = __importDefault(require("./routes/webhook.js"));
 const payment_js_1 = __importDefault(require("./routes/payment.js"));
 const devices_js_1 = __importDefault(require("./routes/devices.js"));
@@ -25,6 +26,7 @@ app.use(express_1.default.json({
 // Request logger
 app.use(middleware_js_1.requestLogger);
 // Register routes
+app.use('/api/auth', auth_js_1.default);
 app.use('/api/webhook', webhook_js_1.default);
 app.use('/api/payment', payment_js_1.default);
 app.use('/api/devices', devices_js_1.default);

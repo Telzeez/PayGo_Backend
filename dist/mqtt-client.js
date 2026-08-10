@@ -31,19 +31,18 @@ class MqttService {
         });
         this.client.on('connect', () => {
             console.log('✅ MQTT successfully connected to secure cloud broker');
-            // Subscribe to redemption requests from any device
-            this.client?.subscribe('paygo/device/+/redeem', { qos: 1 }, (err) => {
+            // Subscribe to redemption and energy report streams from devices
+            this.client?.subscribe(['paygo/device/+/redeem', 'paygo/device/+/energy'], { qos: 1 }, (err) => {
                 if (err) {
                     console.error('❌ MQTT Subscription assignment error:', err);
                 }
                 else {
-                    console.log('📡 Subscribed to stream: paygo/device/+/redeem');
+                    console.log('📡 Subscribed to streams: paygo/device/+/redeem and paygo/device/+/energy');
                 }
             });
         });
         this.client.on('error', (error) => {
             console.error('❌ MQTT execution error:', error.message);
-            // NOTE: The library handles reconnecting automatically now via `reconnectPeriod`
         });
         this.client.on('message', async (topic, message) => {
             await this.handleMessage(topic, message);
@@ -58,13 +57,56 @@ class MqttService {
                 console.warn('Invalid topic format parse received:', topic);
                 return;
             }
-            console.log(`📩 Message intercepted from ${deviceId}:`, payload);
+            console.log(`📩 Message intercepted from ${deviceId} on ${topic}:`, payload);
             if (topic.includes('/redeem') && payload.code) {
                 await this.handleRedemption(deviceId, payload.code);
+            }
+            else if (topic.includes('/energy') && typeof payload.wh_consumed === 'number') {
+                await this.handleEnergyReport(deviceId, payload.wh_consumed);
             }
         }
         catch (error) {
             console.error('MQTT message payload format parse error:', error);
+        }
+    }
+    async handleEnergyReport(deviceId, whConsumed) {
+        if (whConsumed <= 0)
+            return;
+        const kwhConsumed = whConsumed / 1000;
+        const client = await db_js_1.default.connect();
+        try {
+            await client.query('BEGIN');
+            const deviceRes = await client.query(`SELECT current_balance FROM devices WHERE device_id = $1 FOR UPDATE`, [deviceId]);
+            if (deviceRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                client.release();
+                return;
+            }
+            const currentBalance = parseFloat(deviceRes.rows[0].current_balance);
+            const newBalance = Math.max(0, currentBalance - kwhConsumed);
+            await client.query(`UPDATE devices SET current_balance = $1, last_updated = NOW() WHERE device_id = $2`, [newBalance, deviceId]);
+            await client.query(`INSERT INTO transactions (device_id, type, amount) VALUES ($1, 'consumption', $2)`, [deviceId, kwhConsumed]);
+            await client.query('COMMIT');
+            client.release();
+            console.log(`⚡ Energy report for ${deviceId}: deducted ${kwhConsumed} kWh, new balance: ${newBalance} kWh`);
+            // If balance reached 0, publish CLOSE relay command to hardware
+            if (newBalance <= 0) {
+                const closeCommand = {
+                    action: 'CLOSE',
+                    reason: 'BALANCE_EXHAUSTED',
+                    timestamp: new Date().toISOString(),
+                };
+                this.client?.publish(`paygo/device/${deviceId}/command`, JSON.stringify(closeCommand), { qos: 1 });
+                console.log(`🔒 Zero balance reached for ${deviceId}. Issued CLOSE relay command.`);
+            }
+        }
+        catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            }
+            catch (rollbackErr) { }
+            client.release();
+            console.error(`Error processing energy report for ${deviceId}:`, error);
         }
     }
     async handleRedemption(deviceId, tokenCode) {

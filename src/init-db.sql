@@ -1,3 +1,14 @@
+-- Table for storing registered users (Buyers & Solar Owners)
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  phone VARCHAR(50),
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(20) NOT NULL CHECK (role IN ('BUYER', 'OWNER')) DEFAULT 'BUYER',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Table for storing generated tokens
 CREATE TABLE IF NOT EXISTS paygo_tokens (
   id SERIAL PRIMARY KEY,
@@ -34,3 +45,4 @@ CREATE INDEX IF NOT EXISTS idx_tokens_device_id ON paygo_tokens(device_id);
 CREATE INDEX IF NOT EXISTS idx_tokens_used ON paygo_tokens(used);
 CREATE INDEX IF NOT EXISTS idx_tokens_expires_at ON paygo_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_device_id ON transactions(device_id);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

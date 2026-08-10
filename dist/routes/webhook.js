@@ -45,7 +45,8 @@ router.post('/paystack', async (req, res) => {
             const amountPaid = transaction.amount / 100;
             const deviceId = transaction.metadata.deviceId || 'device_001';
             const kwhAmount = amountPaid / PRICE_PER_KWH;
-            const tokenCode = crypto_1.default.randomInt(10000000, 99999999).toString();
+            const tokenCode = (crypto_1.default.randomInt(10000000, 99999999).toString() +
+                crypto_1.default.randomInt(10000000, 99999999).toString());
             const hashedToken = await bcrypt_1.default.hash(tokenCode, SALT_ROUNDS);
             const expiresAt = new Date();
             expiresAt.setHours(expiresAt.getHours() + TOKEN_EXPIRY_HOURS);

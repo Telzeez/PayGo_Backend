@@ -60,7 +60,10 @@ router.post(
         const deviceId: string = transaction.metadata.deviceId || 'device_001';
         const kwhAmount: number = amountPaid / PRICE_PER_KWH;
 
-        const tokenCode: string = crypto.randomInt(10000000, 99999999).toString();
+        const tokenCode: string = (
+          crypto.randomInt(10000000, 99999999).toString() + 
+          crypto.randomInt(10000000, 99999999).toString()
+        );
         const hashedToken: string = await bcrypt.hash(tokenCode, SALT_ROUNDS);
 
         const expiresAt = new Date();

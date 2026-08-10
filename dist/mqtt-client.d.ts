@@ -2,6 +2,7 @@ declare class MqttService {
     private client;
     connect(): void;
     private handleMessage;
+    private handleEnergyReport;
     private handleRedemption;
     private publishResponse;
     disconnect(): void;
