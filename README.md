@@ -112,8 +112,10 @@ backend/
     ├── __tests__/
     │   └── endpoints.test.ts # Endpoint unit & integration test suite
     ├── middlewares/
-    │   └── middleware.ts # Request logger, 404 handler, global error handler
+    │   ├── middleware.ts # Request logger, 404 handler, global error handler
+    │   └── authMiddleware.ts # JWT authentication & role guard middleware
     ├── routes/
+    │   ├── auth.ts       # /api/auth/register, /login, /me, /logout endpoints
     │   ├── payment.ts    # /api/payment/initiate endpoint
     │   ├── webhook.ts    # /api/webhook/paystack HMAC-verified webhook handler
     │   ├── devices.ts    # /api/devices/:deviceId balance & transactions handler
@@ -128,9 +130,24 @@ backend/
 
 ## 🗄 Database Schema
 
-The database schema is defined in [`src/init-db.sql`](file:///c:/Users/Telzeez/Desktop/SolarPayMe(SPM)/backend/src/init-db.sql) and consists of three primary tables:
+The database schema is defined in [`src/init-db.sql`](file:///c:/Users/Telzeez/Desktop/SolarPayMe(SPM)/backend/src/init-db.sql) and consists of four primary tables:
 
-### 1. `paygo_tokens`
+### 1. `users`
+Stores registered account credentials for Buyers and Solar Owners.
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `SERIAL` | `PRIMARY KEY` | Auto-incrementing user ID |
+| `email` | `VARCHAR(255)` | `UNIQUE, NOT NULL` | User email address |
+| `phone` | `VARCHAR(50)` | `NULL` | User mobile contact number |
+| `password_hash` | `VARCHAR(255)` | `NOT NULL` | Bcrypt hashed account password |
+| `role` | `VARCHAR(20)` | `CHECK ('BUYER','OWNER')` | Account classification role |
+| `created_at` | `TIMESTAMP` | `DEFAULT NOW()` | Record creation timestamp |
+| `updated_at` | `TIMESTAMP` | `DEFAULT NOW()` | Last update timestamp |
+
+**Indexes**: `idx_users_email`
+
+### 2. `paygo_tokens`
 Stores generated electricity top-up tokens.
 
 | Column | Type | Constraints | Description |
@@ -258,19 +275,65 @@ psql -U postgres -d paygo_db -f src/init-db.sql
 
 ## 📡 API Reference
 
-### Health Check
+---
 
-#### `GET /health`
-Returns the server status, uptime, and system timestamp.
+### User Authentication
+
+#### `POST /api/auth/register`
+Registers a new user (Buyer or Owner) with email, password, optional phone number, and role.
+
+**Request Body:**
+```json
+{
+  "email": "buyer@example.com",
+  "password": "securePassword123",
+  "phone": "08012345678",
+  "role": "BUYER"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": 1,
+    "email": "buyer@example.com",
+    "phone": "08012345678",
+    "role": "BUYER"
+  }
+}
+```
+
+#### `POST /api/auth/login`
+Authenticates a user and returns a signed JWT access token.
+
+**Request Body:**
+```json
+{
+  "email": "buyer@example.com",
+  "password": "securePassword123"
+}
+```
 
 **Response (200 OK):**
 ```json
 {
-  "status": "OK",
-  "timestamp": "2026-08-10T18:30:00.000Z",
-  "uptime": 124.52
+  "success": true,
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": 1,
+    "email": "buyer@example.com",
+    "phone": "08012345678",
+    "role": "BUYER"
+  }
 }
 ```
+
+#### `GET /api/auth/me`
+Retrieves the profile of the authenticated user.
+- **Header**: `Authorization: Bearer <token>`
 
 ---
 
