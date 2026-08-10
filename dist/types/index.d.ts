@@ -16,21 +16,19 @@ export interface Device {
     currentBalance: number;
     lastUpdated: Date;
 }
-
 export interface Transaction {
     id: number;
     deviceId: string;
-    type: 'topup'| 'consumption';
+    type: 'topup' | 'consumption';
     amount: number;
     timestamp: Date;
-
 }
 export interface PaymentInitialRequest {
     amount: number;
-    email: string
+    email: string;
     deviceId: string;
 }
-export interface MqttRedeemPayload{
+export interface MqttRedeemPayload {
     code: string;
 }
 export interface MqttCreditCommand {
@@ -38,9 +36,8 @@ export interface MqttCreditCommand {
     kwh: number;
     timestamp: string;
 }
-
 export interface MqttResponsePayload {
-    status: 'SUCCESS'| 'ERROR';
+    status: 'SUCCESS' | 'ERROR';
     message: string;
     timestamp: string;
 }
@@ -48,8 +45,13 @@ export interface PaystackWebhookEvent {
     event: 'charge.success' | 'charge.failed';
     data: {
         amount: number;
-        customer: {email: string};
-        metadata: {deviceId?: string; deviceid?: string};
-        reference: string
-    }
+        customer: {
+            email: string;
+        };
+        metadata: {
+            deviceId?: string;
+            deviceid?: string;
+        };
+        reference: string;
+    };
 }

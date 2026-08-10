@@ -1,22 +1,33 @@
-import express,{Express} from 'express'
+import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv'
-import {notFoundError, globalError, requestLogger} from './middlewares/middleware'
+import dotenv from 'dotenv';
+import { notFoundError, globalError, requestLogger } from './middlewares/middleware.js';
 import webhookRoutes from './routes/webhook.js';
 import paymentRoutes from './routes/payment.js';
 import deviceRoutes from './routes/devices.js';
 import './mqtt-client.js';  // Auto-connects when imported
+
 dotenv.config();
 
 const app: Express = express();
-const PORT: number = parseInt(process.env.PORT || '3001', 10)
+const PORT: number = parseInt(process.env.PORT || '3001', 10);
 
 app.use(cors());
-app.use(express.json());
 
+//  Intercept raw buffer during global JSON parsing
+app.use(
+  express.json({
+    verify: (req: any, _res, buf) => {
+      if (buf && buf.length) {
+        req.rawBody = buf; // This makes req.rawBody globally available
+      }
+    },
+  })
+);
 
-// request logger
-app.use(requestLogger)
+// Request logger
+app.use(requestLogger);
+
 // Register routes
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/payment', paymentRoutes);
@@ -31,8 +42,9 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
-app.use(notFoundError)
-app.use(globalError)
+app.use(notFoundError);
+app.use(globalError);
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

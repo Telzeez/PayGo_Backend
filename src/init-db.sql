@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS paygo_tokens (
   used BOOLEAN DEFAULT FALSE,
   redeemed_at TIMESTAMP
 );
+ALTER TABLE paygo_tokens ADD COLUMN paystack_reference VARCHAR(255) UNIQUE;
 
 -- Table for tracking devices and their balances
 CREATE TABLE IF NOT EXISTS devices (

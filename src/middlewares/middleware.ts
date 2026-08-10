@@ -1,15 +1,16 @@
-import express, {Error, Request, Response} from 'express';
+import { Request, Response, NextFunction } from 'express';
 
-const notFoundError =(req:Request, res:Response) => {
-    res.status(404).json({error: "Unknown endpoint"})
-}
+const notFoundError = (req: Request, res: Response) => {
+    res.status(404).json({ error: "Unknown endpoint" });
+};
 
-const globalError = (req: Request, res:Response, err: Error, next: any) => {
-    console.log("unhandled error: ",  err);
-    res.status(500).json({error: 'Internal Server Error'})
-}
-const requestLogger = (req, res, next) => {
-    console.clear()
+const globalError = (err: any, req: Request, res: Response, next: NextFunction) => {
+    console.log("unhandled error: ", err);
+    res.status(500).json({ error: 'Internal Server Error' });
+};
+
+const requestLogger = (req: Request, res: Response, next: NextFunction) => {
+    console.clear();
     console.log(JSON.stringify({
         method: req.method,
         path: req.path,
@@ -19,4 +20,4 @@ const requestLogger = (req, res, next) => {
     next();
 };
 
-export {notFoundError, globalError, requestLogger}
+export { notFoundError, globalError, requestLogger };

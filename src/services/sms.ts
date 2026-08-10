@@ -11,7 +11,7 @@ export async function sendSms(phoneNumber:string, tokenCode:string): Promise<voi
       console.warn('SMS not sent - SMS_API_KEY not configured');
       return;
         }
-        const response = await axio.post(process.env.BASE_URL, {
+        const response = await axios.post(process.env.BASE_URL || '', {
             to: phoneNumber,
             from: "PAYGO",
             sms: `Your PAYGO token is ${tokenCode}. valid for 72 hours.`,
