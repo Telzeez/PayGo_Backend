@@ -23,22 +23,23 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
     await client.query('BEGIN');
 
     // STEP 2: Atomic Upsert Pattern. Ensures device creation or retrieval in 1 statement.
-    // If it exists, it minimally touches the row to return the correct, current data.
-    const balanceResult = await client.query<{ current_balance: any; last_updated: any }>(
-      `INSERT INTO devices (device_id, current_balance) 
-       VALUES ($1, 0)
+    const balanceResult = await client.query<{ current_balance: any; status: string; last_seen_at: any; last_updated: any }>(
+      `INSERT INTO devices (device_id, current_balance, status) 
+       VALUES ($1, 0, 'OFFLINE')
        ON CONFLICT (device_id) 
        DO UPDATE SET last_updated = NOW() -- Soft modification to trigger output mapping
-       RETURNING current_balance, last_updated`,
+       RETURNING current_balance, status, last_seen_at, last_updated`,
       [deviceId]
     );
 
     const balance = parseFloat(balanceResult.rows[0].current_balance.toString());
+    const status = balanceResult.rows[0].status || 'OFFLINE';
+    const lastSeenAt = balanceResult.rows[0].last_seen_at;
     const lastUpdated = balanceResult.rows[0].last_updated;
 
     // STEP 3: Execute ledger history slice extraction inside the locked transaction timeline
     const txResult = await client.query<Transaction>(
-      `SELECT id, type, amount, timestamp 
+      `SELECT id, type, amount, kwh_amount, transaction_id, reference, hardware_status, timestamp 
        FROM transactions 
        WHERE device_id = $1 
        ORDER BY timestamp DESC 
@@ -54,6 +55,8 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
       success: true,
       deviceId,
       balance,
+      status,
+      lastSeenAt,
       lastUpdated,
       transactions: txResult.rows,
     });

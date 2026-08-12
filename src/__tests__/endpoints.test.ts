@@ -18,8 +18,15 @@ describe('PAYGO API Endpoint Test Suite', () => {
     });
   });
 
-  after((_context, done) => {
-    server.close(done);
+  after(async () => {
+    try {
+      const mqttService = (await import('../mqtt-client.js')).default;
+      mqttService.disconnect();
+    } catch (err) {}
+    try {
+      await pool.end();
+    } catch (err) {}
+    server.close();
   });
 
   // ==========================================
@@ -339,7 +346,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
         query: async (queryText: string) => {
           if (queryText.includes('INSERT INTO devices')) {
             return {
-              rows: [{ current_balance: mockBalance, last_updated: mockLastUpdated }],
+              rows: [{ current_balance: mockBalance, status: 'ONLINE', last_seen_at: mockLastUpdated, last_updated: mockLastUpdated }],
             };
           }
           if (queryText.includes('SELECT id, type, amount')) {
@@ -358,6 +365,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
         assert.equal(body.success, true);
         assert.equal(body.deviceId, 'device_001');
         assert.equal(body.balance, 25.5);
+        assert.equal(body.status, 'ONLINE');
         assert.ok(Array.isArray(body.transactions));
       } finally {
         pool.connect = originalConnect;
@@ -412,6 +420,226 @@ describe('PAYGO API Endpoint Test Suite', () => {
         });
       } finally {
         pool.query = originalQuery;
+      }
+    });
+  });
+
+  // ==========================================
+  // 7. REMOTE RECHARGE & MQTT HARDWARE INTEGRATION TESTS
+  // ==========================================
+  describe('REMOTE RECHARGE & MQTT HARDWARE LIFECYCLE', () => {
+
+    it('Test 1 — Webhook payment succeeds with PENDING hardware status when MQTT is disconnected', async () => {
+      const secret = process.env.PAYSTACK_SECRET_KEY || 'sk_test_89821baac945f63f2e385317afa688602a5f3683';
+      const payload = {
+        event: 'charge.success',
+        data: {
+          amount: 500000, // ₦5,000 paid
+          customer: { email: 'buyer_test@example.com' },
+          metadata: { deviceId: 'device_test_001' },
+          reference: 'ref_offline_test_101',
+        },
+      };
+
+      const rawBody = JSON.stringify(payload);
+      const signature = crypto.createHmac('sha512', secret).update(rawBody).digest('hex');
+
+      const executedQueries: string[] = [];
+      const originalConnect = pool.connect;
+
+      (pool as any).connect = async () => ({
+        query: async (queryText: string, params?: any[]) => {
+          executedQueries.push(queryText);
+          if (queryText.includes('FOR UPDATE')) {
+            return { rows: [] }; // No duplicate reference
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      });
+
+      try {
+        const res = await fetch(`${baseUrl}/api/webhook/paystack`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-paystack-signature': signature,
+          },
+          body: rawBody,
+        });
+
+        assert.equal(res.status, 200);
+        const text = await res.text();
+        assert.equal(text, 'Webhook processed');
+
+        // Verify DB balance upsert and PENDING transaction insertion occurred
+        const hasBalanceUpsert = executedQueries.some((q) => q.includes('INSERT INTO devices'));
+        const hasPendingTxInsert = executedQueries.some((q) => q.includes('INSERT INTO transactions') && q.includes('PENDING'));
+        const hasTokenAutoCreditedInsert = executedQueries.some((q) => q.includes('INSERT INTO paygo_tokens') && q.includes('auto_credited'));
+
+        assert.ok(hasBalanceUpsert, 'DB device balance upsert must execute');
+        assert.ok(hasPendingTxInsert, 'Transaction record with PENDING hardware status must be inserted');
+        assert.ok(hasTokenAutoCreditedInsert, 'Fallback token with auto_credited=true must be inserted');
+      } finally {
+        pool.connect = originalConnect;
+      }
+    });
+
+    it('Test 2 — Device ACK updates hardware status from PENDING to CONFIRMED', async () => {
+      const originalQuery = pool.query;
+      let updatedStatus: string | null = null;
+      let targetTxId: string | null = null;
+
+      (pool as any).query = async (queryText: string, params?: any[]) => {
+        if (queryText.includes('UPDATE transactions SET hardware_status')) {
+          updatedStatus = params?.[0] || null; // Could be params from hardware_status = $1 WHERE transaction_id = $2
+          if (queryText.includes("'CONFIRMED'")) updatedStatus = 'CONFIRMED';
+        }
+        return { rows: [] };
+      };
+
+      try {
+        // Import mqttService to simulate ACK reception
+        const mqttService = (await import('../mqtt-client.js')).default;
+        
+        // Simulate hardware ACK message handler directly
+        const ackPayload = {
+          action: 'CREDIT_ACK',
+          transactionId: 'TXN_TEST_CONFIRM_999',
+          deviceId: 'device_test_001',
+          status: 'ACCEPTED',
+          balance: 25.0,
+          timestamp: new Date().toISOString(),
+        };
+
+        // Trigger ACK processing
+        await (mqttService as any).handleCreditAck('device_test_001', ackPayload);
+
+        assert.equal(updatedStatus, 'CONFIRMED', 'ACK ACCEPTED must update hardware_status to CONFIRMED');
+      } finally {
+        pool.query = originalQuery;
+      }
+    });
+
+    it('Test 3 — ESP32 Idempotency Simulation ignores duplicate transactionId', () => {
+      // Simulate ESP32 NVS/flash persistent transaction tracker
+      const esp32ProcessedTxIds = new Set<string>();
+      let esp32MeterBalance = 10.0; // initial balance 10 kWh
+
+      const processIncomingCreditCommandOnEsp32 = (command: { transactionId: string; kwh: number }) => {
+        if (esp32ProcessedTxIds.has(command.transactionId)) {
+          // Duplicate transaction detected! Do not add balance again.
+          return { status: 'ACCEPTED', balance: esp32MeterBalance, duplicateIgnored: true };
+        }
+
+        // New transaction! Add balance and track ID in persistent storage
+        esp32MeterBalance += command.kwh;
+        esp32ProcessedTxIds.add(command.transactionId);
+        return { status: 'ACCEPTED', balance: esp32MeterBalance, duplicateIgnored: false };
+      };
+
+      const commandPayload = { transactionId: 'TXN_UNIQUE_555', kwh: 15.0 };
+
+      // First execution
+      const firstRun = processIncomingCreditCommandOnEsp32(commandPayload);
+      assert.equal(firstRun.duplicateIgnored, false);
+      assert.equal(esp32MeterBalance, 25.0);
+
+      // Duplicate execution (e.g. MQTT retry or re-publish)
+      const duplicateRun = processIncomingCreditCommandOnEsp32(commandPayload);
+      assert.equal(duplicateRun.duplicateIgnored, true);
+      assert.equal(esp32MeterBalance, 25.0, 'Meter balance must NOT increase a second time');
+    });
+
+    it('Test 4 — Fallback token redemption skips DB balance addition when auto_credited is true', async () => {
+      const originalConnect = pool.connect;
+      const bcrypt = await import('bcrypt');
+      const mockTokenCode = '1234567887654321';
+      const mockTokenHash = await bcrypt.hash(mockTokenCode, 10);
+
+      let balanceAddedToDb = false;
+
+      (pool as any).connect = async () => ({
+        query: async (queryText: string, params?: any[]) => {
+          if (queryText.includes('SELECT id, token_hash')) {
+            return {
+              rows: [{
+                id: 42,
+                token_hash: mockTokenHash,
+                kwh_amount: '10.00',
+                auto_credited: true,
+                transaction_id: 'TXN_FALLBACK_123',
+              }],
+            };
+          }
+          if (queryText.includes('SELECT current_balance FROM devices')) {
+            return { rows: [{ current_balance: '50.00' }] };
+          }
+          if (queryText.includes('UPDATE devices SET current_balance')) {
+            balanceAddedToDb = true; // Should NOT be called for auto_credited tokens
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      });
+
+      try {
+        const mqttService = (await import('../mqtt-client.js')).default;
+        await (mqttService as any).handleRedemption('device_test_001', mockTokenCode);
+
+        assert.equal(balanceAddedToDb, false, 'Fallback token redemption must NOT add balance to DB if auto_credited=true');
+      } finally {
+        pool.connect = originalConnect;
+      }
+    });
+
+    it('Test 5 — Paystack duplicate webhook returns 200 and prevents duplicate DB credit', async () => {
+      const secret = process.env.PAYSTACK_SECRET_KEY || 'sk_test_89821baac945f63f2e385317afa688602a5f3683';
+      const payload = {
+        event: 'charge.success',
+        data: {
+          amount: 200000,
+          customer: { email: 'buyer_dup@example.com' },
+          metadata: { deviceId: 'device_test_001' },
+          reference: 'ref_duplicate_check_777',
+        },
+      };
+
+      const rawBody = JSON.stringify(payload);
+      const signature = crypto.createHmac('sha512', secret).update(rawBody).digest('hex');
+
+      const originalConnect = pool.connect;
+      let balanceAdded = false;
+
+      (pool as any).connect = async () => ({
+        query: async (queryText: string) => {
+          if (queryText.includes('SELECT id FROM transactions')) {
+            return { rows: [{ id: 99 }] }; // Reference ALREADY exists in transactions table
+          }
+          if (queryText.includes('INSERT INTO devices')) {
+            balanceAdded = true;
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      });
+
+      try {
+        const res = await fetch(`${baseUrl}/api/webhook/paystack`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-paystack-signature': signature,
+          },
+          body: rawBody,
+        });
+
+        assert.equal(res.status, 200);
+        const text = await res.text();
+        assert.equal(text, 'Webhook already processed');
+        assert.equal(balanceAdded, false, 'Duplicate webhook must NOT add balance to DB');
+      } finally {
+        pool.connect = originalConnect;
       }
     });
   });

@@ -41,7 +41,9 @@ export interface PaygoToken {
     deviceId: string;
     kwhAmount: number;
     tokenHash: string;
+    transactionId?: string;
     paystackReference?: string;
+    autoCredited?: boolean;
     createdAt: Date;
     expiresAt: Date;
     used: boolean;
@@ -51,33 +53,52 @@ export interface Device {
     id: number;
     deviceId: string;
     currentBalance: number;
+    status?: 'ONLINE' | 'OFFLINE';
+    lastSeenAt?: Date | null;
     lastUpdated: Date;
 }
 
 export interface Transaction {
     id: number;
     deviceId: string;
-    type: 'topup'| 'consumption';
-    amount: number;
+    type: 'topup' | 'consumption';
+    amount: number;       // Monetary amount in Naira
+    kwhAmount: number;    // Energy amount in kWh
+    transactionId?: string;
+    reference?: string;
+    hardwareStatus?: 'PENDING' | 'CONFIRMED' | 'FAILED';
+    retryCount?: number;
+    lastAttemptAt?: Date | null;
     timestamp: Date;
-
 }
 export interface PaymentInitialRequest {
     amount: number;
-    email: string
+    email: string;
     deviceId: string;
 }
-export interface MqttRedeemPayload{
+export interface MqttRedeemPayload {
     code: string;
 }
 export interface MqttCreditCommand {
     action: 'CREDIT';
+    transactionId: string;
+    deviceId: string;
     kwh: number;
     timestamp: string;
 }
 
+export interface MqttCreditAck {
+    action: 'CREDIT_ACK';
+    transactionId: string;
+    deviceId: string;
+    status: 'ACCEPTED' | 'REJECTED';
+    reason?: string;
+    balance?: number;
+    timestamp: string;
+}
+
 export interface MqttResponsePayload {
-    status: 'SUCCESS'| 'ERROR';
+    status: 'SUCCESS' | 'ERROR';
     message: string;
     timestamp: string;
 }

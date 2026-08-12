@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import pool from '../db.js';
 import { sendSms } from '../services/sms.js';
 import { PaystackWebhookEvent } from '../types/index.js';
+import mqttService from '../mqtt-client.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -44,7 +45,7 @@ router.post(
 
         // STEP 2: Idempotency Check (Using 'FOR UPDATE' locks this specific row if it exists)
         const existingTx = await client.query(
-          'SELECT id FROM paygo_tokens WHERE paystack_reference = $1 FOR UPDATE',
+          'SELECT id FROM transactions WHERE reference = $1 FOR UPDATE',
           [reference]
         );
 
@@ -56,9 +57,12 @@ router.post(
         }
 
         const buyerEmail: string = transaction.customer.email;
-        const amountPaid: number = transaction.amount / 100; 
-        const deviceId: string = transaction.metadata.deviceId || 'device_001';
+        const amountPaid: number = transaction.amount / 100; // Amount in Naira
+        const deviceId: string = transaction.metadata.deviceId || transaction.metadata.deviceid || 'device_001';
         const kwhAmount: number = amountPaid / PRICE_PER_KWH;
+
+        // Generate clean internal transaction ID
+        const txId = `TXN_${crypto.randomUUID().substring(0, 8).toUpperCase()}`;
 
         const tokenCode: string = (
           crypto.randomInt(10000000, 99999999).toString() + 
@@ -69,41 +73,59 @@ router.post(
         const expiresAt = new Date();
         expiresAt.setHours(expiresAt.getHours() + TOKEN_EXPIRY_HOURS);
 
-        // STEP 3: Insert token within the transaction session
+        // STEP 3: Financial Credit to DB Balance (Upsert device)
+        await client.query(
+          `INSERT INTO devices (device_id, current_balance, last_updated)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (device_id)
+           DO UPDATE SET current_balance = devices.current_balance + $2, last_updated = NOW()`,
+          [deviceId, kwhAmount]
+        );
+
+        // STEP 4: Insert transaction record
         try {
           await client.query(
-            `INSERT INTO paygo_tokens 
-             (buyer_email, device_id, kwh_amount, token_hash, expires_at, used, paystack_reference) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [buyerEmail, deviceId, kwhAmount, hashedToken, expiresAt, false, reference]
+            `INSERT INTO transactions 
+             (device_id, type, amount, kwh_amount, transaction_id, reference, hardware_status, last_attempt_at) 
+             VALUES ($1, 'topup', $2, $3, $4, $5, 'PENDING', NOW())`,
+            [deviceId, amountPaid, kwhAmount, txId, reference]
           );
         } catch (dbError: any) {
           if (dbError.code === '23505') { 
-            console.log(` Race condition caught. Reference ${reference} processed concurrently.`);
+            console.log(`Race condition caught. Reference ${reference} processed concurrently.`);
             await client.query('ROLLBACK');
             client.release();
             return res.status(200).send('Webhook already processed');
           }
-          throw dbError; // Pass up to the main catch block to trigger full rollback
+          throw dbError;
         }
 
-        // STEP 4: Send the SMS
-        // If this throws an error, the catch block will run 'ROLLBACK', erasing the DB entry above
+        // STEP 5: Insert fallback token record
+        await client.query(
+          `INSERT INTO paygo_tokens 
+           (buyer_email, device_id, kwh_amount, token_hash, expires_at, used, paystack_reference, transaction_id, auto_credited) 
+           VALUES ($1, $2, $3, $4, $5, false, $6, $7, true)`,
+          [buyerEmail, deviceId, kwhAmount, hashedToken, expiresAt, reference, txId]
+        );
+
+        // STEP 6: Send SMS notification
         await sendSms(buyerEmail, tokenCode);
 
-        // STEP 5: COMMIT THE TRANSACTION
-        // Only makes changes permanent if everything (including SMS) succeeded
+        // STEP 7: COMMIT THE TRANSACTION BEFORE MQTT PUBLISHING
         await client.query('COMMIT');
         client.release();
 
-        console.log(`✅ Transaction fully processed. Token ${tokenCode} sent to ${buyerEmail}`);
+        console.log(`✅ Financial transaction committed for ${deviceId}. txId: ${txId}, reference: ${reference}`);
+
+        // STEP 8: POST-COMMIT MQTT CREDIT COMMAND DISPATCH
+        mqttService.publishCreditCommand(deviceId, kwhAmount, txId);
+
         return res.status(200).send('Webhook processed');
       }
 
       client.release();
       res.status(200).send('Event ignored');
     } catch (error) {
-      // CRITICAL PROTECTION: Erase database modifications if anything failed mid-process
       console.error('Webhook error, rolling back modifications:', error);
       try {
         await client.query('ROLLBACK');
