@@ -17,10 +17,10 @@ export async function sendSms(phoneNumber: string, tokenCode: string): Promise<v
       endpointUrl,
       {
         to: phoneNumber,
-        from: 'PAYGO',
+        from: process.env.SMS_SENDER_ID || 'N-Alert',
         sms: `Your PAYGO token is ${tokenCode}. Valid for 72 hours.`,
         type: 'plain',
-        channel: 'generic',
+        channel: 'dnd',
         api_key: apiKey,
       },
       {
@@ -31,6 +31,6 @@ export async function sendSms(phoneNumber: string, tokenCode: string): Promise<v
     console.log(`📨 SMS successfully sent to ${phoneNumber}: ${tokenCode}`);
   } catch (error: any) {
     console.log(`📱 [FALLBACK] Token for ${phoneNumber}: ${tokenCode}`);
-    console.warn('SMS sending failed:', error?.message || String(error));
+    console.warn('SMS sending failed:', error?.response?.data || error?.message || String(error));
   }
 }
