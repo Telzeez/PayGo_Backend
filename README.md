@@ -41,6 +41,7 @@ A robust, enterprise-grade backend service built with **Node.js**, **Express.js*
 - **Internal Transaction ID Idempotency**: Each top-up assigns a unique internal `transactionId` (`TXN_XXXXXXXX`). The ESP32 tracks processed transaction IDs persistently to prevent duplicate crediting.
 - **Paystack Webhook Idempotency**: DB-level `reference VARCHAR(255) UNIQUE` constraint prevents duplicate processing of retried Paystack webhooks.
 - **Money vs. Energy Separation**: Explicitly stores both `amount` (financial value paid in Naira) and `kwh_amount` (energy units purchased in kWh).
+- **Local Energy Marketplace Engine**: Powers peer-to-peer energy trading with a Haversine geographical distance matching engine. Buyers can discover sellers within a specific service radius, while the backend enforces strict idempotency and `reserved_kwh` locks to prevent race conditions during purchase.
 - **Fallback Recovery Token Engine**: Generates 16-digit fallback tokens marked `auto_credited = true`. Manual token entry checks financial status first, skipping DB balance re-addition while re-dispatching hardware commands.
 - **Throttled Retry & Reconnect Engine**: Retries pending hardware credit commands when an ESP32 reconnects or sends heartbeats, respecting backoff delays (`last_attempt_at > 15s`).
 - **Device Online/Offline Monitoring**: Automatically updates device connectivity state (`status: ONLINE/OFFLINE`, `last_seen_at`) upon receiving hardware messages.
@@ -131,6 +132,7 @@ backend/
     │   ├── payment.ts    # /api/payment/initiate endpoint
     │   ├── webhook.ts    # /api/webhook/paystack HMAC-verified remote recharge handler
     │   ├── devices.ts    # /api/devices/:deviceId profile, status & transactions endpoint
+    │   ├── marketplace.ts # /api/marketplace endpoints for haversine matching & energy purchases
     │   └── transactions.ts # /api/transactions/verify/:reference lookup endpoint
     ├── services/
     │   └── sms.ts        # Termii SMS delivery service with fallback logger
@@ -196,6 +198,15 @@ Stores generated fallback recovery tokens.
 | `redeemed_at`        | `TIMESTAMP`     | `NULL`          | Redemption timestamp                              |
 
 **Indexes**: `idx_tokens_device_id`, `idx_tokens_used`, `idx_tokens_expires_at`
+
+### 4. `marketplace_sources` & `marketplace_listings`
+Manages local energy sellers and available energy inventory.
+
+| Table | Description |
+| :--- | :--- |
+| `marketplace_sources` | Stores seller configurations, `device_id`, exact `latitude`/`longitude` and `service_radius_meters`. |
+| `marketplace_listings` | Stores active listings, `kwh_available`, `price_per_kwh_kobo`, and status (`ACTIVE`, `PAUSED`). |
+| `marketplace_purchases` | Tracks peer-to-peer energy purchases including `buyer_device_id`, `amount`, and `status`. |
 
 ---
 
@@ -316,6 +327,13 @@ Retrieves meter status, balance, connectivity state, and transaction ledger.
 ```
 
 ---
+
+### `GET /api/marketplace/nearby`
+
+Discovers active energy listings within a geographical radius using the Haversine formula.
+
+- **Query Params**: `lat`, `lng`, `radiusMeters` (default 5000)
+- **Response**: Array of eligible seller listings containing approximate distance in meters and tariff rates.
 
 ## 🔌 MQTT Communication Protocol
 

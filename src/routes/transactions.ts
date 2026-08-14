@@ -1,5 +1,7 @@
 import express, { Request, Response } from 'express';
+import axios from 'axios';
 import pool from '../db.js';
+import { processSuccessfulPayment } from '../services/paymentProcessor.js';
 
 const router = express.Router();
 
@@ -34,6 +36,44 @@ router.get('/verify/:reference', async (req: Request, res: Response) => {
             hardwareStatus: txCheck.rows[0].hardware_status
           }
         });
+      }
+
+      // --- ACTIVE VERIFICATION FALLBACK ---
+      try {
+        const secret = process.env.PAYSTACK_SECRET_KEY || '';
+        const paystackRes = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
+          headers: { Authorization: `Bearer ${secret}` },
+          timeout: 5000
+        });
+
+        if (paystackRes.data && paystackRes.data.status === true && paystackRes.data.data.status === 'success') {
+          const transaction = paystackRes.data.data;
+          const buyerEmail: string = transaction.customer.email;
+          const amountPaid: number = transaction.amount / 100;
+          const deviceId: string = transaction.metadata?.deviceId || transaction.metadata?.deviceid || 'device_001';
+
+          console.log(`[Active Fallback] Recovering missed webhook for reference: ${reference}`);
+          
+          const processed = await processSuccessfulPayment(reference as string, buyerEmail, amountPaid, deviceId);
+          
+          if (processed) {
+             const PRICE_PER_KWH = parseFloat(process.env.PRICE_PER_KWH || '200');
+             const kwhAmount = amountPaid / PRICE_PER_KWH;
+             
+             return res.status(200).json({
+               status: 'success',
+               data: {
+                 kwhAmount: kwhAmount,
+                 hardwareStatus: 'PENDING'
+               }
+             });
+          }
+        }
+      } catch (fallbackError: any) {
+        // If Paystack returns a 400 (not found), just ignore and keep polling
+        if (fallbackError.response && fallbackError.response.status !== 400) {
+          console.error('Active verification fallback error:', fallbackError.message);
+        }
       }
 
       return res.status(200).json({ 
