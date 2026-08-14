@@ -31,7 +31,7 @@ export const authenticateToken = (req: AuthenticatedRequest, res: Response, next
   }
 };
 
-export const requireRole = (allowedRoles: Array<'BUYER' | 'OWNER'>) => {
+export const requireRole = (allowedRoles: Array<'BUYER' | 'OWNER' | 'SELLER'>) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({
@@ -40,13 +40,16 @@ export const requireRole = (allowedRoles: Array<'BUYER' | 'OWNER'>) => {
       });
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({
-        success: false,
-        error: `Access denied. Requires one of roles: ${allowedRoles.join(', ')}`,
-      });
+    const hasBuyer = allowedRoles.includes('BUYER') && req.user.isBuyer;
+    const hasSeller = (allowedRoles.includes('SELLER') || allowedRoles.includes('OWNER')) && req.user.isSeller;
+
+    if (hasBuyer || hasSeller || allowedRoles.includes(req.user.role as any)) {
+      return next();
     }
 
-    next();
+    return res.status(403).json({
+      success: false,
+      error: `Access denied. Requires one of capabilities: ${allowedRoles.join(', ')}`,
+    });
   };
 };

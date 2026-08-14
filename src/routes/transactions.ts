@@ -6,6 +6,7 @@ const router = express.Router();
 router.get('/verify/:reference', async (req: Request, res: Response) => {
   try {
     const { reference } = req.params;
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 
     if (!reference) {
       return res.status(400).json({ status: 'failed', error: 'Missing transaction reference' });
@@ -19,8 +20,22 @@ router.get('/verify/:reference', async (req: Request, res: Response) => {
       [reference]
     );
 
-    // CASE 1: Webhook has not executed yet (or payment failed entirely)
+    // CASE 1: Webhook has not executed yet in paygo_tokens, check transactions table
     if (result.rows.length === 0) {
+      const txCheck = await pool.query(
+        `SELECT kwh_amount, hardware_status FROM transactions WHERE reference = $1`,
+        [reference]
+      );
+      if (txCheck.rows.length > 0) {
+        return res.status(200).json({
+          status: 'success',
+          data: {
+            kwhAmount: parseFloat(txCheck.rows[0].kwh_amount),
+            hardwareStatus: txCheck.rows[0].hardware_status
+          }
+        });
+      }
+
       return res.status(200).json({ 
         status: 'pending', 
         message: 'Payment confirmation processing by background workers.' 

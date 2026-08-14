@@ -16,7 +16,7 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '72h';
 // ==========================================
 router.post('/register', async (req: Request, res: Response) => {
   try {
-    const { email, password, phone, role } = req.body as RegisterRequest;
+    const { email, password, phone } = req.body as RegisterRequest;
 
     if (!email || !password) {
       return res.status(400).json({
@@ -32,7 +32,9 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    const assignedRole: 'BUYER' | 'OWNER' = role === 'OWNER' ? 'OWNER' : 'BUYER';
+    const assignedRole = 'USER';
+    const isBuyer = true;
+    const isSeller = false;
     const normalizedEmail = email.trim().toLowerCase();
 
     // Check if user already exists
@@ -53,19 +55,20 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Insert user
     const insertResult = await pool.query(
-      `INSERT INTO users (email, phone, password_hash, role) 
-       VALUES ($1, $2, $3, $4) 
-       RETURNING id, email, phone, role, created_at`,
-      [normalizedEmail, phone || null, passwordHash, assignedRole]
+      `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller) 
+       VALUES ($1, $2, $3, $4, $5, $6) 
+       RETURNING id, email, phone, role, is_buyer, is_seller, created_at`,
+      [normalizedEmail, phone || null, passwordHash, assignedRole, isBuyer, isSeller]
     );
 
     const newUser = insertResult.rows[0];
 
-    // Generate JWT token
     const tokenPayload: JwtPayload = {
       userId: newUser.id,
       email: newUser.email,
       role: newUser.role,
+      isBuyer: newUser.is_buyer,
+      isSeller: newUser.is_seller,
     };
 
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
@@ -78,6 +81,8 @@ router.post('/register', async (req: Request, res: Response) => {
         email: newUser.email,
         phone: newUser.phone,
         role: newUser.role,
+        isBuyer: newUser.is_buyer,
+        isSeller: newUser.is_seller,
       },
     });
 
@@ -108,7 +113,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Query user by email
     const result = await pool.query(
-      'SELECT id, email, phone, password_hash, role FROM users WHERE email = $1',
+      'SELECT id, email, phone, password_hash, role, is_buyer, is_seller FROM users WHERE email = $1',
       [normalizedEmail]
     );
 
@@ -135,6 +140,8 @@ router.post('/login', async (req: Request, res: Response) => {
       userId: user.id,
       email: user.email,
       role: user.role,
+      isBuyer: user.is_buyer,
+      isSeller: user.is_seller,
     };
 
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
@@ -147,6 +154,8 @@ router.post('/login', async (req: Request, res: Response) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        isBuyer: user.is_buyer,
+        isSeller: user.is_seller,
       },
     });
 
@@ -169,7 +178,7 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
     }
 
     const result = await pool.query(
-      'SELECT id, email, phone, role, created_at FROM users WHERE id = $1',
+      'SELECT id, email, phone, role, is_buyer, is_seller, created_at FROM users WHERE id = $1',
       [req.user.userId]
     );
 
@@ -185,6 +194,8 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
         email: user.email,
         phone: user.phone,
         role: user.role,
+        isBuyer: user.is_buyer,
+        isSeller: user.is_seller,
         createdAt: user.created_at,
       },
     });
@@ -196,13 +207,71 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
 });
 
 // ==========================================
-// 4. LOGOUT
+// 5. UPDATE USER PROFILE
 // ==========================================
-router.post('/logout', (req: Request, res: Response) => {
-  return res.json({
-    success: true,
-    message: 'Successfully logged out',
-  });
+router.put('/profile', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const { email, phone, newPassword } = req.body;
+    const userId = req.user.userId;
+
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (phone !== undefined) {
+      updates.push(`phone = $${paramIndex++}`);
+      values.push(phone ? phone.trim() : null);
+    }
+
+    if (email && email.trim()) {
+      const normalizedEmail = email.trim().toLowerCase();
+      const existing = await pool.query(
+        'SELECT id FROM users WHERE email = $1 AND id != $2',
+        [normalizedEmail, userId]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ success: false, error: 'Email address is already in use' });
+      }
+      updates.push(`email = $${paramIndex++}`);
+      values.push(normalizedEmail);
+    }
+
+    if (newPassword && newPassword.trim().length >= 6) {
+      const passwordHash = await bcrypt.hash(newPassword.trim(), BCRYPT_SALT_ROUNDS);
+      updates.push(`password_hash = $${paramIndex++}`);
+      values.push(passwordHash);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid profile fields provided for update' });
+    }
+
+    values.push(userId);
+    const queryStr = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, email, phone, role, created_at`;
+
+    const result = await pool.query(queryStr, values);
+    const updatedUser = result.rows[0];
+
+    return res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        role: updatedUser.role,
+        createdAt: updatedUser.created_at,
+      },
+    });
+
+  } catch (error) {
+    console.error('Update profile error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to update user profile' });
+  }
 });
 
 export default router;

@@ -90,6 +90,42 @@ router.post(
              VALUES ($1, 'topup', $2, $3, $4, $5, 'PENDING', NOW())`,
             [deviceId, amountPaid, kwhAmount, txId, reference]
           );
+
+          // Settle any reserved marketplace purchase tied to this device & buyer
+          const mktRes = await client.query(
+            `SELECT id, listing_id, kwh_requested 
+             FROM marketplace_purchases 
+             WHERE device_id = $1 AND status = 'RESERVED' 
+             ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+            [deviceId]
+          );
+
+          if (mktRes.rows.length > 0) {
+            const mktPurchase = mktRes.rows[0];
+            const kwhReq = parseFloat(mktPurchase.kwh_requested);
+
+            // Update purchase record to COMPLETED
+            await client.query(
+              `UPDATE marketplace_purchases 
+               SET status = 'COMPLETED', paystack_reference = $1, updated_at = NOW() 
+               WHERE id = $2`,
+              [reference, mktPurchase.id]
+            );
+
+            // Reconcile reserved_kwh and available_kwh on the energy listing
+            await client.query(
+              `UPDATE energy_listings 
+               SET available_kwh = GREATEST(0, available_kwh - $1),
+                   reserved_kwh = GREATEST(0, reserved_kwh - $1),
+                   status = CASE WHEN (available_kwh - $1) <= 0 THEN 'SOLD_OUT' ELSE status END,
+                   updated_at = NOW()
+               WHERE id = $2`,
+              [kwhReq, mktPurchase.listing_id]
+            );
+
+            console.log(`✅ Marketplace purchase #${mktPurchase.id} settled. Energy deducted: ${kwhReq} kWh.`);
+          }
+
         } catch (dbError: any) {
           if (dbError.code === '23505') { 
             console.log(`Race condition caught. Reference ${reference} processed concurrently.`);

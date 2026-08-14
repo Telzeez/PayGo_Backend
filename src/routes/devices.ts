@@ -47,6 +47,17 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
       [deviceId]
     );
 
+    const transactions = txResult.rows.map((row: any) => ({
+      id: row.id,
+      type: row.type,
+      amount: parseFloat(row.amount || 0),
+      kwhAmount: parseFloat(row.kwh_amount || 0),
+      transactionId: row.transaction_id,
+      reference: row.reference,
+      hardwareStatus: row.hardware_status || 'PENDING',
+      timestamp: row.timestamp,
+    }));
+
     // STEP 4: Commit changes to close database connection locks
     await client.query('COMMIT');
     client.release();
@@ -58,7 +69,7 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
       status,
       lastSeenAt,
       lastUpdated,
-      transactions: txResult.rows,
+      transactions,
     });
 
   } catch (error) {
@@ -75,6 +86,44 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
       success: false,
       error: 'Internal service synchronization failure',
     });
+  }
+});
+
+router.get('/:deviceId/tokens', async (req: Request, res: Response) => {
+  try {
+    const deviceId = req.params.deviceId as string;
+
+    if (!deviceId) {
+      return res.status(400).json({ success: false, error: 'Missing device ID' });
+    }
+
+    const result = await pool.query(
+      `SELECT id, kwh_amount, expires_at, used, auto_credited, transaction_id, created_at
+       FROM paygo_tokens 
+       WHERE device_id = $1 
+       ORDER BY created_at DESC 
+       LIMIT 10`,
+      [deviceId]
+    );
+
+    const tokens = result.rows.map((row) => ({
+      id: row.id,
+      kwhAmount: parseFloat(row.kwh_amount),
+      expiresAt: row.expires_at,
+      used: row.used,
+      autoCredited: row.auto_credited,
+      transactionId: row.transaction_id,
+      createdAt: row.created_at,
+    }));
+
+    return res.json({
+      success: true,
+      deviceId,
+      tokens,
+    });
+  } catch (error) {
+    console.error('Error fetching device tokens:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch tokens' });
   }
 });
 

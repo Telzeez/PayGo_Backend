@@ -71,7 +71,7 @@ sequenceDiagram
     Buyer->>PS: Complete Payment
     PS->>API: Webhook (charge.success) [HMAC-SHA512 Signed]
     API->>API: Verify Signature & Generate Internal transactionId (TXN_XXX)
-    
+
     note over API,DB: STEP 1: COMMIT DB FINANCIAL CREDIT FIRST
     API->>DB: BEGIN TX: Add kWh to devices.balance, Insert Tx (hardware_status=PENDING), Insert Fallback Token
     API->>DB: COMMIT TX
@@ -80,7 +80,7 @@ sequenceDiagram
     note over API,ESP: STEP 2: POST-COMMIT MQTT DISPATCH & ACK
     API->>Broker: Publish paygo/device/{id}/command {action: CREDIT, transactionId, kwh}
     Broker->>ESP: Relay CREDIT Command
-    
+
     alt ESP32 Online
         ESP->>ESP: Deduplicate transactionId & Energize Relay
         ESP->>Broker: Publish paygo/device/{id}/ack {status: ACCEPTED, transactionId}
@@ -142,55 +142,58 @@ backend/
 
 ## 🗄 Database Schema
 
-The database schema is defined in [`src/init-db.sql`](file:///c:/Users/Telzeez/Desktop/SolarPayMe(SPM)/backend/src/init-db.sql):
+The database schema is defined in [`src/init-db.sql`](<file:///c:/Users/Telzeez/Desktop/PayGo(SPM)/backend/src/init-db.sql>):
 
 ### 1. `devices`
+
 Tracks physical meters, energy balances, and connectivity state.
 
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `id` | `SERIAL` | `PRIMARY KEY` | Database row identifier |
-| `device_id` | `VARCHAR(50)` | `UNIQUE, NOT NULL` | Physical meter hardware serial ID |
-| `current_balance` | `DECIMAL(10,2)`| `DEFAULT 0` | Current available energy credit (kWh) |
-| `status` | `VARCHAR(20)` | `DEFAULT 'OFFLINE'`| Connectivity status (`ONLINE` / `OFFLINE`) |
-| `last_seen_at` | `TIMESTAMP` | `NULL` | Timestamp of last received hardware packet |
-| `last_updated` | `TIMESTAMP` | `DEFAULT NOW()` | Timestamp of last balance modification |
+| Column            | Type            | Constraints         | Description                                |
+| :---------------- | :-------------- | :------------------ | :----------------------------------------- |
+| `id`              | `SERIAL`        | `PRIMARY KEY`       | Database row identifier                    |
+| `device_id`       | `VARCHAR(50)`   | `UNIQUE, NOT NULL`  | Physical meter hardware serial ID          |
+| `current_balance` | `DECIMAL(10,2)` | `DEFAULT 0`         | Current available energy credit (kWh)      |
+| `status`          | `VARCHAR(20)`   | `DEFAULT 'OFFLINE'` | Connectivity status (`ONLINE` / `OFFLINE`) |
+| `last_seen_at`    | `TIMESTAMP`     | `NULL`              | Timestamp of last received hardware packet |
+| `last_updated`    | `TIMESTAMP`     | `DEFAULT NOW()`     | Timestamp of last balance modification     |
 
 ### 2. `transactions`
+
 Authoritative ledger for financial payments, energy consumption, and hardware execution status.
 
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `id` | `SERIAL` | `PRIMARY KEY` | Ledger record ID |
-| `device_id` | `VARCHAR(50)` | `NOT NULL` | Target meter identifier |
-| `type` | `VARCHAR(20)` | `CHECK ('topup','consumption')` | Transaction classification |
-| `amount` | `DECIMAL(10,2)`| `NOT NULL` | Monetary value paid (Naira) |
-| `kwh_amount` | `DECIMAL(10,2)`| `DEFAULT 0` | Energy amount (kWh) |
-| `transaction_id` | `VARCHAR(100)`| `UNIQUE` | Internal transaction ID (`TXN_XXXXXXXX`) |
-| `reference` | `VARCHAR(255)`| `UNIQUE` | Paystack payment reference |
-| `hardware_status` | `VARCHAR(20)`| `DEFAULT 'PENDING'` | Hardware credit status (`PENDING` \| `CONFIRMED` \| `FAILED`) |
-| `retry_count` | `INT` | `DEFAULT 0` | Number of MQTT credit command retry attempts |
-| `last_attempt_at` | `TIMESTAMP` | `NULL` | Timestamp of last credit command attempt |
-| `timestamp` | `TIMESTAMP` | `DEFAULT NOW()` | Record creation timestamp |
+| Column            | Type            | Constraints                     | Description                                                   |
+| :---------------- | :-------------- | :------------------------------ | :------------------------------------------------------------ |
+| `id`              | `SERIAL`        | `PRIMARY KEY`                   | Ledger record ID                                              |
+| `device_id`       | `VARCHAR(50)`   | `NOT NULL`                      | Target meter identifier                                       |
+| `type`            | `VARCHAR(20)`   | `CHECK ('topup','consumption')` | Transaction classification                                    |
+| `amount`          | `DECIMAL(10,2)` | `NOT NULL`                      | Monetary value paid (Naira)                                   |
+| `kwh_amount`      | `DECIMAL(10,2)` | `DEFAULT 0`                     | Energy amount (kWh)                                           |
+| `transaction_id`  | `VARCHAR(100)`  | `UNIQUE`                        | Internal transaction ID (`TXN_XXXXXXXX`)                      |
+| `reference`       | `VARCHAR(255)`  | `UNIQUE`                        | Paystack payment reference                                    |
+| `hardware_status` | `VARCHAR(20)`   | `DEFAULT 'PENDING'`             | Hardware credit status (`PENDING` \| `CONFIRMED` \| `FAILED`) |
+| `retry_count`     | `INT`           | `DEFAULT 0`                     | Number of MQTT credit command retry attempts                  |
+| `last_attempt_at` | `TIMESTAMP`     | `NULL`                          | Timestamp of last credit command attempt                      |
+| `timestamp`       | `TIMESTAMP`     | `DEFAULT NOW()`                 | Record creation timestamp                                     |
 
 **Indexes**: `idx_transactions_device_id`, `idx_transactions_tx_id`, `idx_transactions_ref`
 
 ### 3. `paygo_tokens`
+
 Stores generated fallback recovery tokens.
 
-| Column | Type | Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `id` | `SERIAL` | `PRIMARY KEY` | Identifier |
-| `buyer_email` | `VARCHAR(255)` | `NOT NULL` | Purchaser email address |
-| `device_id` | `VARCHAR(50)` | `NOT NULL` | Associated meter ID |
-| `kwh_amount` | `DECIMAL(10,2)`| `NOT NULL` | Energy units in kWh |
-| `token_hash` | `VARCHAR(255)` | `NOT NULL` | Bcrypt hash of 16-digit token code |
-| `transaction_id` | `VARCHAR(100)`| `NULL` | Associated internal transaction ID |
-| `paystack_reference`| `VARCHAR(255)`| `UNIQUE` | Paystack reference |
-| `auto_credited` | `BOOLEAN` | `DEFAULT FALSE` | Flag indicating if DB was credited during payment |
-| `used` | `BOOLEAN` | `DEFAULT FALSE` | Flag indicating if fallback token was redeemed |
-| `expires_at` | `TIMESTAMP` | `NOT NULL` | Token expiration date (72h) |
-| `redeemed_at` | `TIMESTAMP` | `NULL` | Redemption timestamp |
+| Column               | Type            | Constraints     | Description                                       |
+| :------------------- | :-------------- | :-------------- | :------------------------------------------------ |
+| `id`                 | `SERIAL`        | `PRIMARY KEY`   | Identifier                                        |
+| `buyer_email`        | `VARCHAR(255)`  | `NOT NULL`      | Purchaser email address                           |
+| `device_id`          | `VARCHAR(50)`   | `NOT NULL`      | Associated meter ID                               |
+| `kwh_amount`         | `DECIMAL(10,2)` | `NOT NULL`      | Energy units in kWh                               |
+| `token_hash`         | `VARCHAR(255)`  | `NOT NULL`      | Bcrypt hash of 16-digit token code                |
+| `transaction_id`     | `VARCHAR(100)`  | `NULL`          | Associated internal transaction ID                |
+| `paystack_reference` | `VARCHAR(255)`  | `UNIQUE`        | Paystack reference                                |
+| `auto_credited`      | `BOOLEAN`       | `DEFAULT FALSE` | Flag indicating if DB was credited during payment |
+| `used`               | `BOOLEAN`       | `DEFAULT FALSE` | Flag indicating if fallback token was redeemed    |
+| `expires_at`         | `TIMESTAMP`     | `NOT NULL`      | Token expiration date (72h)                       |
+| `redeemed_at`        | `TIMESTAMP`     | `NULL`          | Redemption timestamp                              |
 
 **Indexes**: `idx_tokens_device_id`, `idx_tokens_used`, `idx_tokens_expires_at`
 
@@ -269,6 +272,7 @@ npm install
 ## 📡 API Reference
 
 ### `POST /api/webhook/paystack`
+
 Handles incoming Paystack payment webhooks with automatic remote credit.
 
 - **Headers**: `x-paystack-signature` (HMAC-SHA512)
@@ -283,9 +287,11 @@ Handles incoming Paystack payment webhooks with automatic remote credit.
 ---
 
 ### `GET /api/devices/:deviceId`
+
 Retrieves meter status, balance, connectivity state, and transaction ledger.
 
 **Response (200 OK):**
+
 ```json
 {
   "success": true,
@@ -315,18 +321,20 @@ Retrieves meter status, balance, connectivity state, and transaction ledger.
 
 ### Topic Taxonomy
 
-| Direction | MQTT Topic | Description |
-| :--- | :--- | :--- |
-| **Backend ➔ Hardware** | `paygo/device/{deviceId}/command` | Credit commands & Relay control |
-| **Hardware ➔ Backend** | `paygo/device/{deviceId}/ack` | Execution ACK confirmations |
-| **Hardware ➔ Backend** | `paygo/device/{deviceId}/status` | Device heartbeats & online status |
-| **Hardware ➔ Backend** | `paygo/device/{deviceId}/energy` | Energy consumption reports |
-| **Hardware ➔ Backend** | `paygo/device/{deviceId}/redeem` | Keypad fallback token redemption |
+| Direction              | MQTT Topic                        | Description                       |
+| :--------------------- | :-------------------------------- | :-------------------------------- |
+| **Backend ➔ Hardware** | `paygo/device/{deviceId}/command` | Credit commands & Relay control   |
+| **Hardware ➔ Backend** | `paygo/device/{deviceId}/ack`     | Execution ACK confirmations       |
+| **Hardware ➔ Backend** | `paygo/device/{deviceId}/status`  | Device heartbeats & online status |
+| **Hardware ➔ Backend** | `paygo/device/{deviceId}/energy`  | Energy consumption reports        |
+| **Hardware ➔ Backend** | `paygo/device/{deviceId}/redeem`  | Keypad fallback token redemption  |
 
 ---
 
 ### Remote Credit Command
+
 Published by backend to `paygo/device/{deviceId}/command`:
+
 ```json
 {
   "action": "CREDIT",
@@ -338,7 +346,9 @@ Published by backend to `paygo/device/{deviceId}/command`:
 ```
 
 ### Hardware ACK Response
+
 Published by ESP32 to `paygo/device/{deviceId}/ack`:
+
 ```json
 {
   "action": "CREDIT_ACK",

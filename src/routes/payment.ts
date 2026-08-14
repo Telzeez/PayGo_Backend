@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import axios from 'axios';
-import { PaymentInitialRequest } from '../types/index';
+import { PaymentInitialRequest } from '../types/index.js';
 import dotenv from 'dotenv';
 
 dotenv.config()
@@ -25,13 +25,14 @@ router.post('/initiate', async (req:Request, res:Response) => {
         }
 
         // call paystack API
+        const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
         const response = await axios.post(
             'https://api.paystack.co/transaction/initialize',
             {
                 email,
                 amount: amount* 100,
                 metadata: {deviceId},
-                callback_url: `${process.env.BASE_URL}/api/webhook/paystack`
+                callback_url: `${FRONTEND_URL}/verify`
             },
             {
                 headers:{

@@ -7,6 +7,8 @@ import webhookRoutes from './routes/webhook.js';
 import paymentRoutes from './routes/payment.js';
 import deviceRoutes from './routes/devices.js';
 import transactionRoutes from './routes/transactions.js';
+import marketplaceRoutes from './routes/marketplace.js';
+
 
 dotenv.config();
 
@@ -24,6 +26,7 @@ app.use(
     },
   })
 );
+app.use(express.static('dist'));
 
 // Request logger
 app.use(requestLogger);
@@ -34,6 +37,7 @@ app.use('/api/webhook', webhookRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/transactions', transactionRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
 
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response) => {

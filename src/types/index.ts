@@ -2,7 +2,9 @@ export interface User {
     id: number;
     email: string;
     phone?: string;
-    role: 'BUYER' | 'OWNER';
+    role: string;
+    isBuyer: boolean;
+    isSeller: boolean;
     createdAt: Date;
 }
 
@@ -10,7 +12,9 @@ export interface RegisterRequest {
     email: string;
     password: string;
     phone?: string;
-    role?: 'BUYER' | 'OWNER';
+    role?: string;
+    isBuyer?: boolean;
+    isSeller?: boolean;
 }
 
 export interface LoginRequest {
@@ -25,14 +29,18 @@ export interface AuthResponse {
         id: number;
         email: string;
         phone?: string;
-        role: 'BUYER' | 'OWNER';
+        role: string;
+        isBuyer: boolean;
+        isSeller: boolean;
     };
 }
 
 export interface JwtPayload {
     userId: number;
     email: string;
-    role: 'BUYER' | 'OWNER';
+    role: string;
+    isBuyer: boolean;
+    isSeller: boolean;
 }
 
 export interface PaygoToken {
