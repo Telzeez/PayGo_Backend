@@ -11,7 +11,7 @@ export async function sendSms(phoneNumber: string, tokenCode: string): Promise<v
       return;
     }
 
-    const endpointUrl: string = process.env.SMS_ENDPOINT_URL || 'https://api.ng.termii.com/api/sms/send';
+    const endpointUrl = 'https://api.ng.termii.com/api/sms/send';
 
     await axios.post(
       endpointUrl,
