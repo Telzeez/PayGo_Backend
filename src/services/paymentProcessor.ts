@@ -114,8 +114,19 @@ export async function processSuccessfulPayment(reference: string, buyerEmail: st
       [buyerEmail, deviceId, kwhAmount, hashedToken, expiresAt, reference, txId]
     );
 
+    // Fetch the user's phone number for SMS delivery
+    const userRes = await client.query('SELECT phone FROM users WHERE email = $1', [buyerEmail]);
+    let phoneNumber = '';
+    if (userRes.rows.length > 0 && userRes.rows[0].phone) {
+      phoneNumber = userRes.rows[0].phone.replace('+', ''); // Termii expects format without '+'
+    }
+
     // STEP 6: Send SMS notification
-    await sendSms(buyerEmail, tokenCode);
+    if (phoneNumber) {
+      await sendSms(phoneNumber, tokenCode);
+    } else {
+      console.warn(`No phone number configured for ${buyerEmail}. Skipping SMS.`);
+    }
 
     // STEP 7: COMMIT THE TRANSACTION BEFORE MQTT PUBLISHING
     await client.query('COMMIT');
