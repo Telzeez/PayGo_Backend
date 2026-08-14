@@ -147,7 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_marketplace_purchases_seller ON marketplace_purch
 -- SEED DEMO DATA FOR PROTOTYPE DEMONSTRATION
 -- ======================================================
 INSERT INTO devices (device_id, current_balance, status, last_seen_at)
-VALUES ('DEVICE-001', 30.00, 'ONLINE', NOW())
+VALUES ('DEVICE-001', 30.00, 'OFFLINE', NULL)
 ON CONFLICT (device_id) DO NOTHING;
 
 INSERT INTO users (email, phone, password_hash, role)
