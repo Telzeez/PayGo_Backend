@@ -4,6 +4,16 @@ import { Device, Transaction } from '../types/index.js';
 
 const router = express.Router();
 
+router.get('/reset-offline', async (req: Request, res: Response) => {
+  try {
+    await pool.query("UPDATE devices SET status = 'OFFLINE', last_seen_at = NULL WHERE device_id = 'DEVICE-001'");
+    res.json({ success: true, message: "DEVICE-001 has been reset to OFFLINE. You can safely remove this endpoint." });
+  } catch (error) {
+    console.error('Reset error:', error);
+    res.status(500).json({ success: false, error: 'Failed to reset device' });
+  }
+});
+
 router.get('/:deviceId', async (req: Request, res: Response) => {
   // Acquire a dedicated connection thread to maintain atomicity across our dual queries
   const client = await pool.connect();
