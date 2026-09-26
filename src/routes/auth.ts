@@ -4,12 +4,15 @@ import jwt from 'jsonwebtoken';
 import pool from '../db.js';
 import { RegisterRequest, LoginRequest, JwtPayload } from '../types/index.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
-
+import { OAuth2Client } from 'google-auth-library';
+import crypto from 'crypto';
 const router = express.Router();
 
 const BCRYPT_SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
 const JWT_SECRET = process.env.JWT_SECRET || 'paygo_default_jwt_secret_key_2026';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '72h';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // ==========================================
 // 1. REGISTER NEW USER (BUYER OR OWNER)
@@ -46,7 +49,7 @@ router.post('/register', async (req: Request, res: Response) => {
     if (existingUser.rows.length > 0) {
       return res.status(409).json({
         success: false,
-        error: 'User with this email address already exists',
+        error: 'User with this email address already exists please login',
       });
     }
 
@@ -164,6 +167,162 @@ router.post('/login', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Internal server error during login',
+    });
+  }
+});
+
+// ==========================================
+// 2.5 GOOGLE LOGIN/REGISTER
+// ==========================================
+router.post('/google', async (req: Request, res: Response) => {
+  try {
+    const { token, role = 'BUYER' } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'Token is required' });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      return res.status(400).json({ success: false, error: 'Invalid Google token payload' });
+    }
+    
+    const normalizedEmail = payload.email.trim().toLowerCase();
+    
+    // Check if user exists
+    let result = await pool.query(
+      'SELECT id, email, phone, role, is_buyer, is_seller FROM users WHERE email = $1',
+      [normalizedEmail]
+    );
+    
+    if (result.rows.length === 0) {
+      // User does not exist. Tell frontend to prompt for remaining fields.
+      const registrationToken = jwt.sign(
+        { email: normalizedEmail, isRegistration: true },
+        JWT_SECRET,
+        { expiresIn: '15m' } as any
+      );
+      
+      return res.json({
+        success: true,
+        needsRegistration: true,
+        registrationToken
+      });
+    }
+    
+    const user = result.rows[0];
+    
+    const tokenPayload: JwtPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      isBuyer: user.is_buyer,
+      isSeller: user.is_seller,
+    };
+    
+    const jwtToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
+    
+    return res.json({
+      success: true,
+      token: jwtToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        isBuyer: user.is_buyer,
+        isSeller: user.is_seller,
+      },
+    });
+
+  } catch (error) {
+    console.error('Google Auth failure:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error during Google authentication',
+    });
+  }
+});
+
+// ==========================================
+// 2.6 GOOGLE REGISTER (COMPLETE SIGN UP)
+// ==========================================
+router.post('/register-google', async (req: Request, res: Response) => {
+  try {
+    const { registrationToken, phone, role } = req.body;
+
+    if (!registrationToken) {
+      return res.status(400).json({ success: false, error: 'Registration token is required' });
+    }
+
+    let decoded: any;
+    try {
+      decoded = jwt.verify(registrationToken, JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ success: false, error: 'Invalid or expired registration token' });
+    }
+
+    if (!decoded.email || !decoded.isRegistration) {
+      return res.status(400).json({ success: false, error: 'Invalid token payload' });
+    }
+
+    const normalizedEmail = decoded.email.trim().toLowerCase();
+
+    // Ensure user doesn't already exist
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1',
+      [normalizedEmail]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({ success: false, error: 'User with this email already exists' });
+    }
+
+    const isBuyer = role === 'BUYER';
+    const isSeller = role === 'OWNER';
+    const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
+
+    const insertResult = await pool.query(
+      `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller) 
+       VALUES ($1, $2, $3, $4, $5, $6) 
+       RETURNING id, email, phone, role, is_buyer, is_seller, created_at`,
+      [normalizedEmail, phone || null, null, assignedRole, isBuyer, isSeller]
+    );
+
+    const newUser = insertResult.rows[0];
+
+    const tokenPayload: JwtPayload = {
+      userId: newUser.id,
+      email: newUser.email,
+      role: newUser.role,
+      isBuyer: newUser.is_buyer,
+      isSeller: newUser.is_seller,
+    };
+
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: newUser.id,
+        email: newUser.email,
+        phone: newUser.phone,
+        role: newUser.role,
+        isBuyer: newUser.is_buyer,
+        isSeller: newUser.is_seller,
+      },
+    });
+  } catch (error) {
+    console.error('Google Registration failure:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error during Google registration',
     });
   }
 });

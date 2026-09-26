@@ -8,8 +8,11 @@ const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000
-
+    connectionTimeoutMillis: 2000,
+    ssl: process.env.NODE_ENV === 'production' ? {
+        rejectUnauthorized: true,
+        ca: process.env.DB_CA_CERT 
+    } : undefined
 })
 pool.on('connect', () => {
     console.log('Postgres connected')

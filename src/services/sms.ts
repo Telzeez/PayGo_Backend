@@ -11,12 +11,18 @@ export async function sendSms(phoneNumber: string, tokenCode: string): Promise<v
       return;
     }
 
-    const endpointUrl = 'https://api.ng.termii.com/api/sms/send';
+    const endpointUrl = process.env.SMS_ENDPOINT_URL || 'https://api.ng.termii.com/api/sms/send';
+
+    // Termii strictly requires international format without '+' (e.g., 23480...)
+    let formattedPhone = phoneNumber.replace(/\+/g, '');
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '234' + formattedPhone.substring(1);
+    }
 
     await axios.post(
       endpointUrl,
       {
-        to: phoneNumber,
+        to: formattedPhone,
         from: process.env.SMS_SENDER_ID || 'N-Alert',
         sms: `Your PAYGO token is ${tokenCode}. Valid for 72 hours.`,
         type: 'plain',

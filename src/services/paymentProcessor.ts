@@ -109,9 +109,9 @@ export async function processSuccessfulPayment(reference: string, buyerEmail: st
     // STEP 5: Insert fallback token record
     await client.query(
       `INSERT INTO paygo_tokens 
-       (buyer_email, device_id, kwh_amount, token_hash, expires_at, used, paystack_reference, transaction_id, auto_credited) 
-       VALUES ($1, $2, $3, $4, $5, false, $6, $7, true)`,
-      [buyerEmail, deviceId, kwhAmount, hashedToken, expiresAt, reference, txId]
+       (buyer_email, device_id, kwh_amount, token_hash, raw_token, expires_at, used, paystack_reference, transaction_id, auto_credited) 
+       VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, true)`,
+      [buyerEmail, deviceId, kwhAmount, hashedToken, tokenCode, expiresAt, reference, txId]
     );
 
     // Fetch the user's phone number for SMS delivery

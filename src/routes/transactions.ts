@@ -16,7 +16,7 @@ router.get('/verify/:reference', async (req: Request, res: Response) => {
 
     // Perform a lightweight, non-locking read query
     const result = await pool.query(
-      `SELECT kwh_amount, expires_at, used 
+      `SELECT kwh_amount, expires_at, used, raw_token 
        FROM paygo_tokens 
        WHERE paystack_reference = $1`,
       [reference]
@@ -89,7 +89,8 @@ router.get('/verify/:reference', async (req: Request, res: Response) => {
       data: {
         kwhAmount: tokenData.kwh_amount,
         expiresAt: tokenData.expires_at,
-        used: tokenData.used
+        used: tokenData.used,
+        fallbackToken: tokenData.raw_token
       }
     });
 
