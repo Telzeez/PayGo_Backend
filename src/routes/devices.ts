@@ -15,19 +15,20 @@ router.get('/reset-offline', async (req: Request, res: Response) => {
 });
 
 router.get('/:deviceId', async (req: Request, res: Response) => {
-  // Acquire a dedicated connection thread to maintain atomicity across our dual queries
-  const client = await pool.connect();
+  let client;
 
   try {
     const deviceId = req.params.deviceId as string;
 
     if (!deviceId || typeof deviceId !== 'string' || deviceId.trim().length < 3) {
-      client.release();
       return res.status(400).json({
         success: false,
         error: 'Invalid device ID specification',
       });
     }
+
+    // Acquire a dedicated connection thread to maintain atomicity across our dual queries
+    client = await pool.connect();
 
     // STEP 1: Initialize transaction boundary
     await client.query('BEGIN');
@@ -71,6 +72,7 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
     // STEP 4: Commit changes to close database connection locks
     await client.query('COMMIT');
     client.release();
+    client = undefined;
 
     return res.json({
       success: true,
@@ -83,13 +85,16 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    // Gracefully clean database stack traces on execution exceptions
-    try {
-      await client.query('ROLLBACK');
-    } catch (rollbackErr) {
-      console.error('Failed to issue transaction rollback:', rollbackErr);
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('Failed to issue transaction rollback:', rollbackErr);
+      }
+      try {
+        client.release();
+      } catch (releaseErr) {}
     }
-    client.release();
 
     console.error('CRITICAL: Device profile synchronization failure:', error);
     return res.status(500).json({

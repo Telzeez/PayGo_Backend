@@ -4,20 +4,23 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const isAiven = process.env.DATABASE_URL && process.env.DATABASE_URL.indexOf('aivencloud.com') !== -1;
+const dbUrl = process.env.DATABASE_URL || '';
+const isLocal = !dbUrl || dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: dbUrl,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-    ssl: isAiven ? { rejectUnauthorized: false } : undefined
-})
-pool.on('connect', () => {
-    console.log('Postgres connected')
-})
-pool.on("error", (err)=> {
-    console.error("Postresql error: ", err)
-})
+    connectionTimeoutMillis: 10000,
+    ssl: isLocal ? undefined : { rejectUnauthorized: false }
+});
 
-export default pool
+pool.on('connect', () => {
+    console.log('Postgres connected');
+});
+
+pool.on("error", (err) => {
+    console.error("Postgresql error: ", err);
+});
+
+export default pool;
