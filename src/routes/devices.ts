@@ -100,6 +100,9 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: error?.message || 'Internal service synchronization failure',
+      code: error?.code,
+      detail: error?.detail,
+      hint: error?.hint,
     });
   }
 });
