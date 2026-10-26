@@ -8,9 +8,9 @@ router.get('/reset-offline', async (req: Request, res: Response) => {
   try {
     await pool.query("UPDATE devices SET status = 'OFFLINE', last_seen_at = NULL WHERE device_id = 'DEVICE-001'");
     res.json({ success: true, message: "DEVICE-001 has been reset to OFFLINE. You can safely remove this endpoint." });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Reset error:', error);
-    res.status(500).json({ success: false, error: 'Failed to reset device' });
+    res.status(500).json({ success: false, error: error?.message || 'Failed to reset device' });
   }
 });
 
@@ -84,7 +84,7 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
       transactions,
     });
 
-  } catch (error) {
+  } catch (error: any) {
     if (client) {
       try {
         await client.query('ROLLBACK');
@@ -99,7 +99,7 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
     console.error('CRITICAL: Device profile synchronization failure:', error);
     return res.status(500).json({
       success: false,
-      error: 'Internal service synchronization failure',
+      error: error?.message || 'Internal service synchronization failure',
     });
   }
 });
