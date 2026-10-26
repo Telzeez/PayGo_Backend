@@ -77,7 +77,7 @@ class MqttService {
 
       console.log(`📩 Message intercepted from ${deviceId} on ${topic}:`, payload);
 
-      if (topic.includes('/ack') && payload.action === 'CREDIT_ACK') {
+      if (topic.includes('/ack') && (payload.action === 'CREDIT_ACK' || payload.status === 'ACCEPTED' || payload.status === 'REJECTED')) {
         await this.handleCreditAck(deviceId, payload as MqttCreditAck);
       } else if (topic.includes('/redeem') && payload.code) {
         await this.handleRedemption(deviceId, payload.code);

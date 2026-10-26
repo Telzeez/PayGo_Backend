@@ -24,8 +24,9 @@ router.post('/initiate', async (req:Request, res:Response) => {
             })
         }
 
-        // call paystack API
-        const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+        // Determine frontend URL (env var, or dynamic request origin from browser, or localhost fallback)
+        const requestOrigin = (req.headers.origin as string) || (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
+        const FRONTEND_URL = (process.env.FRONTEND_URL || requestOrigin || 'http://localhost:3000').replace(/\/+$/, '');
         const response = await axios.post(
             'https://api.paystack.co/transaction/initialize',
             {
