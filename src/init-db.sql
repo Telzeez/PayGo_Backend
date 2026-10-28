@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'OFFLINE';
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP;
+ALTER TABLE devices ALTER COLUMN current_balance TYPE DECIMAL(12,4);
+ALTER TABLE transactions ALTER COLUMN kwh_amount TYPE DECIMAL(12,4);
 
 -- Table for transaction history
 CREATE TABLE IF NOT EXISTS transactions (

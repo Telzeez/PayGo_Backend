@@ -170,6 +170,145 @@ router.get('/:deviceId/tokens', async (req: Request, res: Response) => {
  * Used when MQTT connection is offline or unavailable.
  */
 
+// Balance Retrieval: GET /api/devices/:deviceId/balance
+router.get('/:deviceId/balance', async (req: Request, res: Response) => {
+  try {
+    const deviceId = req.params.deviceId as string;
+    if (!deviceId) {
+      return res.status(400).json({ success: false, error: 'Missing device ID' });
+    }
+
+    const devRes = await pool.query(
+      'SELECT current_balance, status FROM devices WHERE device_id = $1',
+      [deviceId]
+    );
+
+    if (devRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Device not found' });
+    }
+
+    const balance = parseFloat(devRes.rows[0].current_balance);
+    return res.json({
+      success: true,
+      deviceId,
+      balance,
+      status: devRes.rows[0].status,
+    });
+  } catch (err: any) {
+    console.error('Error fetching device balance:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Server error' });
+  }
+});
+
+// Balance Sync: PUT / POST /api/devices/:deviceId/balance
+const handleBalanceUpdate = async (req: Request, res: Response) => {
+  const deviceId = req.params.deviceId as string;
+  const rawBalance = req.body.balance !== undefined ? req.body.balance : req.body.remaining_balance;
+  const expected = typeof req.body.expected === 'number' && isFinite(req.body.expected) ? req.body.expected : null;
+
+  if (!deviceId) {
+    return res.status(400).json({ success: false, error: 'Missing device ID' });
+  }
+
+  if (typeof rawBalance !== 'number' || !isFinite(rawBalance) || rawBalance < 0) {
+    return res.status(400).json({ success: false, error: 'Invalid balance value. Must be a non-negative number.' });
+  }
+
+  const newBalance = Math.max(0, rawBalance);
+  let client;
+
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    // Acquire exclusive lock on device row
+    const deviceRes = await client.query(
+      'SELECT current_balance, status FROM devices WHERE device_id = $1 FOR UPDATE',
+      [deviceId]
+    );
+
+    let currentServerBalance = 0;
+    if (deviceRes.rows.length === 0) {
+      await client.query(
+        'INSERT INTO devices (device_id, current_balance, status, last_seen_at, last_updated) VALUES ($1, $2, \'ONLINE\', NOW(), NOW())',
+        [deviceId, newBalance]
+      );
+      currentServerBalance = newBalance;
+    } else {
+      currentServerBalance = parseFloat(deviceRes.rows[0].current_balance);
+    }
+
+    // Check for conflict if expected balance was specified by hardware
+    const EPSILON = 0.005; // 5 Wh tolerance
+    if (expected !== null && Math.abs(currentServerBalance - expected) > EPSILON) {
+      // Server balance has changed (e.g. top-up was processed or manual admin adjustment)
+      await client.query(
+        'UPDATE devices SET status = \'ONLINE\', last_seen_at = NOW(), last_updated = NOW() WHERE device_id = $1',
+        [deviceId]
+      );
+      await client.query('COMMIT');
+      client.release();
+      client = undefined;
+
+      console.log(`⚠️ Balance push conflict for ${deviceId}: expected ${expected}, server has ${currentServerBalance}. Returning 409.`);
+      return res.status(409).json({
+        success: false,
+        conflict: true,
+        balance: currentServerBalance,
+        message: 'Server balance changed (e.g. top-up). Adopt server balance and retry.',
+      });
+    }
+
+    // No conflict: persist updated balance
+    await client.query(
+      'UPDATE devices SET current_balance = $1, status = \'ONLINE\', last_seen_at = NOW(), last_updated = NOW() WHERE device_id = $2',
+      [newBalance, deviceId]
+    );
+
+    // Calculate energy consumed
+    const kwhConsumed = expected !== null
+      ? Math.max(0, expected - newBalance)
+      : Math.max(0, currentServerBalance - newBalance);
+
+    if (kwhConsumed >= 0.001) {
+      await client.query(
+        'INSERT INTO transactions (device_id, type, amount, kwh_amount, hardware_status) VALUES ($1, \'consumption\', 0, $2, \'CONFIRMED\')',
+        [deviceId, kwhConsumed]
+      );
+    }
+
+    // Mark any pending top-ups for this device as CONFIRMED since hardware is in active sync
+    await client.query(
+      'UPDATE transactions SET hardware_status = \'CONFIRMED\' WHERE device_id = $1 AND type = \'topup\' AND hardware_status = \'PENDING\'',
+      [deviceId]
+    );
+
+    await client.query('COMMIT');
+    client.release();
+    client = undefined;
+
+    console.log(`✅ Balance sync for ${deviceId}: updated to ${newBalance} kWh (deducted ${kwhConsumed.toFixed(4)} kWh)`);
+
+    return res.status(200).json({
+      success: true,
+      deviceId,
+      balance: newBalance,
+      kwhDeducted: kwhConsumed,
+      relayAction: newBalance > 0 ? 'OPEN' : 'CLOSE',
+    });
+  } catch (err: any) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      client.release();
+    }
+    console.error('Balance sync error:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Server error' });
+  }
+};
+
+router.put('/:deviceId/balance', handleBalanceUpdate);
+router.post('/:deviceId/balance', handleBalanceUpdate);
+
 // 1. Heartbeat / Sync: Hardware reports its remaining balance (hardware is authoritative).
 //    - If the device sends `remaining_balance`, it is written directly to current_balance.
 //    - On first boot (no NVS), the firmware omits remaining_balance so the server seeds it.
