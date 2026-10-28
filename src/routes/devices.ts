@@ -68,7 +68,8 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
 
     // OFFLINE staleness check — if the device hasn't sent a heartbeat in >30s
     // it is effectively offline even if the DB row still says ONLINE.
-    const HEARTBEAT_TTL_MS = 30_000;
+    // OFFLINE staleness threshold — reduced to 12s for fast offline detection
+    const HEARTBEAT_TTL_MS = 12_000;
     let status = rawStatus;
     if (rawStatus === 'ONLINE') {
       const msAgo = lastSeenAt
