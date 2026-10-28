@@ -16,6 +16,22 @@ router.get('/reset-offline', async (req: Request, res: Response) => {
   }
 });
 
+router.all('/reset-all', async (req: Request, res: Response) => {
+  try {
+    await pool.query('TRUNCATE TABLE transactions RESTART IDENTITY CASCADE;');
+    await pool.query('TRUNCATE TABLE paygo_tokens RESTART IDENTITY CASCADE;');
+    await pool.query('TRUNCATE TABLE marketplace_purchases RESTART IDENTITY CASCADE;');
+    await pool.query("UPDATE devices SET current_balance = 0, status = 'OFFLINE', last_seen_at = NULL, last_updated = NOW(); DELETE FROM devices WHERE device_id = 'reset-all';");
+    return res.json({
+      success: true,
+      message: "Successfully cleared all transactions, tokens, and reset device balances to 0 kWh."
+    });
+  } catch (error: any) {
+    console.error('Reset all error:', error);
+    return res.status(500).json({ success: false, error: error?.message || 'Failed to reset database' });
+  }
+});
+
 router.get('/:deviceId', async (req: Request, res: Response) => {
   let client;
 
