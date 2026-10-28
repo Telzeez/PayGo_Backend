@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS devices (
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'OFFLINE';
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP;
 ALTER TABLE devices ALTER COLUMN current_balance TYPE DECIMAL(12,4);
-ALTER TABLE transactions ALTER COLUMN kwh_amount TYPE DECIMAL(12,4);
 
 -- Table for transaction history
 CREATE TABLE IF NOT EXISTS transactions (
@@ -67,6 +66,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS reference VARCHAR(255) UNIQUE;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS hardware_status VARCHAR(20) DEFAULT 'PENDING';
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS retry_count INT DEFAULT 0;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMP;
+ALTER TABLE transactions ALTER COLUMN kwh_amount TYPE DECIMAL(12,4);
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tokens_device_id ON paygo_tokens(device_id);
