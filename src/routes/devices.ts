@@ -170,29 +170,49 @@ router.get('/:deviceId/tokens', async (req: Request, res: Response) => {
  * Used when MQTT connection is offline or unavailable.
  */
 
-// 1. Heartbeat / Sync: Returns device status, current balance, and any unacknowledged pending credits
+// 1. Heartbeat / Sync: Hardware reports its remaining balance (hardware is authoritative).
+//    - If the device sends `remaining_balance`, it is written directly to current_balance.
+//    - On first boot (no NVS), the firmware omits remaining_balance so the server seeds it.
+//    - pendingCredits (new top-ups) flow back down so the hardware can apply them locally.
 router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
   try {
     const deviceId = req.params.deviceId as string;
+    const { remaining_balance } = req.body;
 
     if (!deviceId) {
       return res.status(400).json({ success: false, error: 'Missing device ID' });
     }
 
-    await pool.query(
-      `INSERT INTO devices (device_id, current_balance, status, last_seen_at, last_updated)
-       VALUES ($1, 0, 'ONLINE', NOW(), NOW())
-       ON CONFLICT (device_id)
-       DO UPDATE SET status = 'ONLINE', last_seen_at = NOW(), last_updated = NOW()`,
-      [deviceId]
-    );
+    const hasHardwareBalance =
+      typeof remaining_balance === 'number' && isFinite(remaining_balance) && remaining_balance >= 0;
+
+    if (hasHardwareBalance) {
+      // Hardware is authoritative — write its reported balance directly to the DB
+      await pool.query(
+        `INSERT INTO devices (device_id, current_balance, status, last_seen_at, last_updated)
+         VALUES ($1, $2, 'ONLINE', NOW(), NOW())
+         ON CONFLICT (device_id)
+         DO UPDATE SET status = 'ONLINE', last_seen_at = NOW(), last_updated = NOW(),
+                       current_balance = EXCLUDED.current_balance`,
+        [deviceId, remaining_balance]
+      );
+    } else {
+      // First boot / no balance reported — just mark ONLINE; server keeps its stored balance
+      await pool.query(
+        `INSERT INTO devices (device_id, current_balance, status, last_seen_at, last_updated)
+         VALUES ($1, 0, 'ONLINE', NOW(), NOW())
+         ON CONFLICT (device_id)
+         DO UPDATE SET status = 'ONLINE', last_seen_at = NOW(), last_updated = NOW()`,
+        [deviceId]
+      );
+    }
 
     const devRes = await pool.query('SELECT current_balance FROM devices WHERE device_id = $1', [deviceId]);
     const balance = devRes.rows.length > 0 ? parseFloat(devRes.rows[0].current_balance) : 0;
 
     const pendingRes = await pool.query(
-      `SELECT transaction_id AS "transactionId", kwh_amount AS "kwhAmount" 
-       FROM transactions 
+      `SELECT transaction_id AS "transactionId", kwh_amount AS "kwhAmount"
+       FROM transactions
        WHERE device_id = $1 AND type = 'topup' AND hardware_status = 'PENDING'
        ORDER BY timestamp ASC`,
       [deviceId]
