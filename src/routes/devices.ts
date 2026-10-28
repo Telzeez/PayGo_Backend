@@ -33,6 +33,7 @@ router.all('/reset-all', async (req: Request, res: Response) => {
 });
 
 router.get('/:deviceId', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   let client;
 
   try {
