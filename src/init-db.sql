@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS paygo_tokens (
   device_id VARCHAR(50) NOT NULL,
   kwh_amount DECIMAL(10,2) NOT NULL,
   token_hash VARCHAR(255) NOT NULL,    -- bcrypt hash, not the raw token
+  raw_token TEXT,                      -- plaintext token, sent via SMS and used for display
   transaction_id VARCHAR(100),
   auto_credited BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW(),
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS paygo_tokens (
 ALTER TABLE paygo_tokens ADD COLUMN IF NOT EXISTS paystack_reference VARCHAR(255) UNIQUE;
 ALTER TABLE paygo_tokens ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(100);
 ALTER TABLE paygo_tokens ADD COLUMN IF NOT EXISTS auto_credited BOOLEAN DEFAULT FALSE;
+ALTER TABLE paygo_tokens ADD COLUMN IF NOT EXISTS raw_token TEXT;
 
 -- Table for tracking devices and their balances
 CREATE TABLE IF NOT EXISTS devices (

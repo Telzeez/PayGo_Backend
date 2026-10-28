@@ -46,9 +46,27 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
     );
 
     const balance = parseFloat(balanceResult.rows[0].current_balance.toString());
-    const status = balanceResult.rows[0].status || 'OFFLINE';
+    const rawStatus = balanceResult.rows[0].status || 'OFFLINE';
     const lastSeenAt = balanceResult.rows[0].last_seen_at;
     const lastUpdated = balanceResult.rows[0].last_updated;
+
+    // OFFLINE staleness check — if the device hasn't sent a heartbeat in >30s
+    // it is effectively offline even if the DB row still says ONLINE.
+    const HEARTBEAT_TTL_MS = 30_000;
+    let status = rawStatus;
+    if (rawStatus === 'ONLINE') {
+      const msAgo = lastSeenAt
+        ? Date.now() - new Date(lastSeenAt).getTime()
+        : Infinity;
+      if (msAgo > HEARTBEAT_TTL_MS) {
+        status = 'OFFLINE';
+        // Persist the corrected status inside the open transaction
+        await client.query(
+          `UPDATE devices SET status = 'OFFLINE', last_updated = NOW() WHERE device_id = $1`,
+          [deviceId]
+        );
+      }
+    }
 
     // STEP 3: Execute ledger history slice extraction inside the locked transaction timeline
     const txResult = await client.query<Transaction>(
