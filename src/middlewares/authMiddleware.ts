@@ -41,7 +41,7 @@ export const requireRole = (allowedRoles: Array<'BUYER' | 'OWNER' | 'SELLER'>) =
     }
 
     const hasBuyer = allowedRoles.includes('BUYER') && req.user.isBuyer;
-    const hasSeller = (allowedRoles.includes('SELLER') || allowedRoles.includes('OWNER')) && req.user.isSeller;
+    const hasSeller = allowedRoles.includes('SELLER') && req.user.isSeller;
 
     if (hasBuyer || hasSeller || allowedRoles.includes(req.user.role as any)) {
       return next();

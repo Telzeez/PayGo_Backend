@@ -1,20 +1,13 @@
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
-import bcrypt from 'bcrypt';
 import pool from '../db.js';
-import { sendSms } from '../services/sms.js';
 import { PaystackWebhookEvent } from '../types/index.js';
 import { processSuccessfulPayment } from '../services/paymentProcessor.js';
-import mqttService from '../mqtt-client.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const router = express.Router();
-
-const SALT_ROUNDS: number = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
-const TOKEN_EXPIRY_HOURS: number = parseInt(process.env.TOKEN_EXPIRY_HOURS || '72', 10);
-const PRICE_PER_KWH: number = parseFloat(process.env.PRICE_PER_KWH || '200');
 
 router.post(
   '/paystack',
@@ -41,14 +34,24 @@ router.post(
         const transaction = event.data;
         const reference = transaction.reference;
 
-        const buyerEmail: string = transaction.customer.email;
         const amountPaid: number = transaction.amount / 100; // Amount in Naira
-        const deviceId: string = transaction.metadata.deviceId || transaction.metadata.deviceid || 'device_001';
+        const deviceId: string | undefined = transaction.metadata?.deviceId || transaction.metadata?.deviceid;
+        if (!deviceId) {
+          client.release();
+          console.error(`Successful Paystack payment ${reference} is missing its meter ID.`);
+          return res.status(400).send('Payment is missing its target meter');
+        }
 
-        await processSuccessfulPayment(reference, buyerEmail, amountPaid, deviceId);
+        const purchaseId = Number(transaction.metadata?.marketplacePurchaseId);
+        const processed = await processSuccessfulPayment(
+          reference,
+          amountPaid,
+          deviceId,
+          Number.isInteger(purchaseId) && purchaseId > 0 ? purchaseId : undefined
+        );
 
         client.release();
-        return res.status(200).send('Webhook processed');
+        return res.status(200).send(processed ? 'Webhook processed' : 'Webhook already processed');
       }
 
       client.release();

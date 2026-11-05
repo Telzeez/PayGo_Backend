@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-let dbUrl = process.env.DATABASE_URL || '';
+let dbUrl = process.env.DATABASE_URL || "postgresql://username:postgres@localhost:5432/paygo"
 
 // Handle Render internal host across cross-region setups automatically
 try {

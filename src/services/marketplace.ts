@@ -35,14 +35,12 @@ export class MarketplaceService {
       throw new Error(`Service radius must be between 1 and ${DEFAULT_PLATFORM_MAX_RADIUS_METERS} meters`);
     }
 
-    // Verify device exists
-    const deviceCheck = await pool.query('SELECT id FROM devices WHERE device_id = $1', [deviceId]);
+    const deviceCheck = await pool.query(
+      'SELECT 1 FROM user_devices WHERE user_id = $1 AND device_id = $2',
+      [ownerId, deviceId]
+    );
     if (deviceCheck.rows.length === 0) {
-      // Auto-register device if missing for seamless setup
-      await pool.query('INSERT INTO devices (device_id, current_balance, status) VALUES ($1, 0, $2)', [
-        deviceId,
-        'ONLINE',
-      ]);
+      throw new Error('The energy source meter must be linked to your account first');
     }
 
     const result = await pool.query(
@@ -239,7 +237,6 @@ export class MarketplaceService {
         sourceName: row.sourceName,
         sellerId: row.sellerId,
         sellerEmail: row.sellerEmail,
-        deviceId: row.deviceId,
         distanceMeters,
         effectiveRadiusMeters,
         availableKwh: remainingSellable,
@@ -309,6 +306,16 @@ export class MarketplaceService {
 
       const listing = listingRes.rows[0];
 
+      const buyerMeterRes = await client.query<{ device_id: string }>(
+        `SELECT device_id FROM user_devices
+         WHERE user_id = $1 AND is_selected = true
+         FOR SHARE`,
+        [buyerId]
+      );
+      if (buyerMeterRes.rows.length === 0) {
+        throw new Error('Link and select your own meter before purchasing marketplace energy');
+      }
+
       if (listing.status !== 'ACTIVE') {
         throw new Error('Listing is no longer active for purchase');
       }
@@ -371,7 +378,7 @@ export class MarketplaceService {
           listingId,
           buyerId,
           listing.seller_id,
-          listing.device_id,
+          buyerMeterRes.rows[0].device_id,
           distanceMeters,
           pricePerKwh,
           kwhRequested,

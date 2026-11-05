@@ -1,6 +1,6 @@
 // reset-balance.js
 // Resets DEVICE-001 balance to 0 and status to OFFLINE for retesting.
-// Does NOT touch transactions or tokens.
+// Does NOT touch transaction history.
 // Run with: node reset-balance.js
 
 import pool from './dist/db.js';

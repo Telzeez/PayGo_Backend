@@ -232,7 +232,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
       assert.equal(text, 'Invalid signature');
     });
 
-    it('should process charge.success webhook atomically and dispatch token', async () => {
+    it('should process charge.success webhook atomically and dispatch remote credit', async () => {
       const secret = process.env.PAYSTACK_SECRET_KEY || 'sk_test_89821baac945f63f2e385317afa688602a5f3683';
       const payload = {
         event: 'charge.success',
@@ -395,15 +395,17 @@ describe('PAYGO API Endpoint Test Suite', () => {
       }
     });
 
-    it('should return token details if transaction reference exists', async () => {
+    it('should return remote hardware status if transaction reference exists', async () => {
       const originalQuery = pool.query;
-      const mockToken = {
+      const mockTransaction = {
         kwh_amount: '10.00',
-        expires_at: '2026-08-13T18:00:00.000Z',
-        used: false,
+        hardware_status: 'CONFIRMED',
       };
 
-      (pool as any).query = async () => ({ rows: [mockToken] });
+      (pool as any).query = async (queryText: string) => {
+        assert.match(queryText, /FROM transactions/);
+        return { rows: [mockTransaction] };
+      };
 
       try {
         const res = await fetch(`${baseUrl}/api/transactions/verify/ref_processed_123`);
@@ -413,11 +415,11 @@ describe('PAYGO API Endpoint Test Suite', () => {
         assert.deepEqual(body, {
           status: 'success',
           data: {
-            kwhAmount: '10.00',
-            expiresAt: '2026-08-13T18:00:00.000Z',
-            used: false,
+            kwhAmount: 10,
+            hardwareStatus: 'CONFIRMED',
           },
         });
+        assert.equal('fallbackToken' in body.data, false);
       } finally {
         pool.query = originalQuery;
       }
@@ -475,11 +477,10 @@ describe('PAYGO API Endpoint Test Suite', () => {
         // Verify DB balance upsert and PENDING transaction insertion occurred
         const hasBalanceUpsert = executedQueries.some((q) => q.includes('INSERT INTO devices'));
         const hasPendingTxInsert = executedQueries.some((q) => q.includes('INSERT INTO transactions') && q.includes('PENDING'));
-        const hasTokenAutoCreditedInsert = executedQueries.some((q) => q.includes('INSERT INTO paygo_tokens') && q.includes('auto_credited'));
 
         assert.ok(hasBalanceUpsert, 'DB device balance upsert must execute');
         assert.ok(hasPendingTxInsert, 'Transaction record with PENDING hardware status must be inserted');
-        assert.ok(hasTokenAutoCreditedInsert, 'Fallback token with auto_credited=true must be inserted');
+        assert.equal(executedQueries.some((q) => q.includes('INSERT INTO paygo_tokens')), false, 'Payment must not create a fallback token');
       } finally {
         pool.connect = originalConnect;
       }
@@ -521,6 +522,33 @@ describe('PAYGO API Endpoint Test Suite', () => {
       }
     });
 
+    it('records MQTT energy consumption as a Naira debit, not a zero-value credit', async () => {
+      const originalConnect = pool.connect;
+      let consumptionParams: unknown[] | undefined;
+
+      (pool as any).connect = async () => ({
+        query: async (queryText: string, params?: unknown[]) => {
+          if (queryText.includes('SELECT current_balance')) {
+            return { rows: [{ current_balance: '10.00' }] };
+          }
+          if (queryText.includes("type, amount, kwh_amount")) {
+            consumptionParams = params;
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      });
+
+      try {
+        const mqttService = (await import('../mqtt-client.js')).default;
+        await (mqttService as any).handleEnergyReport('device_test_001', 500);
+
+        assert.deepEqual(consumptionParams, ['device_test_001', -100, 0.5]);
+      } finally {
+        pool.connect = originalConnect;
+      }
+    });
+
     it('Test 3 — ESP32 Idempotency Simulation ignores duplicate transactionId', () => {
       // Simulate ESP32 NVS/flash persistent transaction tracker
       const esp32ProcessedTxIds = new Set<string>();
@@ -551,45 +579,44 @@ describe('PAYGO API Endpoint Test Suite', () => {
       assert.equal(esp32MeterBalance, 25.0, 'Meter balance must NOT increase a second time');
     });
 
-    it('Test 4 — Fallback token redemption skips DB balance addition when auto_credited is true', async () => {
-      const originalConnect = pool.connect;
-      const bcrypt = await import('bcrypt');
-      const mockTokenCode = '1234567887654321';
-      const mockTokenHash = await bcrypt.hash(mockTokenCode, 10);
-
-      let balanceAddedToDb = false;
-
-      (pool as any).connect = async () => ({
-        query: async (queryText: string, params?: any[]) => {
-          if (queryText.includes('SELECT id, token_hash')) {
-            return {
-              rows: [{
-                id: 42,
-                token_hash: mockTokenHash,
-                kwh_amount: '10.00',
-                auto_credited: true,
-                transaction_id: 'TXN_FALLBACK_123',
-              }],
-            };
-          }
-          if (queryText.includes('SELECT current_balance FROM devices')) {
-            return { rows: [{ current_balance: '50.00' }] };
-          }
-          if (queryText.includes('UPDATE devices SET current_balance')) {
-            balanceAddedToDb = true; // Should NOT be called for auto_credited tokens
-          }
-          return { rows: [] };
-        },
-        release: () => {},
+    it('does not expose or accept manual fallback tokens', async () => {
+      const tokensRes = await fetch(`${baseUrl}/api/devices/device_test_001/tokens`);
+      const redeemRes = await fetch(`${baseUrl}/api/devices/device_test_001/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: '1234567887654321' }),
       });
 
-      try {
-        const mqttService = (await import('../mqtt-client.js')).default;
-        await (mqttService as any).handleRedemption('device_test_001', mockTokenCode);
+      assert.equal(tokensRes.status, 404);
+      assert.equal(redeemRes.status, 404);
+    });
 
-        assert.equal(balanceAddedToDb, false, 'Fallback token redemption must NOT add balance to DB if auto_credited=true');
+    it('confirms pending remote credit when a hardware heartbeat matches the server balance', async () => {
+      const originalQuery = pool.query;
+      let confirmationQuery = '';
+
+      (pool as any).query = async (queryText: string) => {
+        if (queryText.includes('UPDATE transactions')) {
+          confirmationQuery = queryText;
+        }
+        if (queryText.includes('SELECT current_balance')) {
+          return { rows: [{ current_balance: '25.00' }] };
+        }
+        return { rows: [] };
+      };
+
+      try {
+        const res = await fetch(`${baseUrl}/api/devices/device_test_001/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ remaining_balance: 25 }),
+        });
+
+        assert.equal(res.status, 200);
+        assert.match(confirmationQuery, /hardware_status = 'CONFIRMED'/);
+        assert.match(confirmationQuery, /ABS\(\$2::numeric/);
       } finally {
-        pool.connect = originalConnect;
+        pool.query = originalQuery;
       }
     });
 

@@ -63,7 +63,6 @@ export interface NearbyListingItem {
   sourceName: string;
   sellerId: number;
   sellerEmail?: string;
-  deviceId: string;
   distanceMeters: number;
   effectiveRadiusMeters: number;
   availableKwh: number;
