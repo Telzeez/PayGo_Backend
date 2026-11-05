@@ -20,6 +20,7 @@ A robust backend service built with **Node.js**, **Express.js**, **TypeScript**,
 - [API Reference](#-api-reference)
   - [Health Check](#health-check)
   - [Payment Initiation](#payment-initiation)
+  - [Marketplace Seller Payouts](#marketplace-seller-payouts)
   - [Paystack Webhook](#paystack-webhook)
   - [Device Profile & Status](#device-profile--status)
   - [Transaction Verification](#transaction-verification)
@@ -41,6 +42,7 @@ A robust backend service built with **Node.js**, **Express.js**, **TypeScript**,
 - **Paystack Webhook Idempotency**: DB-level `reference VARCHAR(255) UNIQUE` constraint prevents duplicate processing of retried Paystack webhooks.
 - **Money vs. Energy Separation**: Explicitly stores both `amount` (financial value paid in Naira) and `kwh_amount` (energy units purchased in kWh).
 - **Local Energy Marketplace Engine**: Powers peer-to-peer energy trading with a Haversine geographical distance matching engine. Buyers can discover sellers within a specific service radius, while the backend enforces strict idempotency and `reserved_kwh` locks to prevent race conditions during purchase.
+- **Marketplace Seller Settlements**: Sellers can connect a Paystack-verified Nigerian bank account. Marketplace payments split 90% to the seller subaccount and 10% to the platform; buyer meter top-ups are not split.
 - **Energy Consumption Ledger**: Records reported consumption as a Naira debit and kWh usage, rather than a zero-value credit.
 - **Throttled Retry & Reconnect Engine**: Retries pending hardware credit commands when an ESP32 reconnects or sends heartbeats, respecting backoff delays (`last_attempt_at > 15s`).
 - **Device Online/Offline Monitoring**: Automatically updates device connectivity state (`status: ONLINE/OFFLINE`, `last_seen_at`) upon receiving hardware messages.
@@ -270,6 +272,20 @@ Handles incoming Paystack payment webhooks with automatic remote credit.
   5. Post-commit: publishes `CREDIT` command over MQTT.
 
 Payment verification returns the transaction's current `hardwareStatus`; it does not generate or return a manual fallback token.
+
+---
+
+### Marketplace Seller Payouts
+
+Authenticated seller and owner accounts can configure a Paystack subaccount for marketplace settlements:
+
+- `GET /api/marketplace/payout-account/banks` — list active Nigerian payout banks.
+- `GET /api/marketplace/payout-account` — return the saved, masked payout-account details.
+- `PUT /api/marketplace/payout-account` — verify a 10-digit bank account with Paystack and create or update the seller subaccount. The request body contains `businessName`, `bankCode`, and `accountNumber`.
+
+The backend stores the Paystack subaccount code, bank name, verified account name, and last four account-number digits; the full account number is sent to Paystack for verification and subaccount setup, not stored by PayGo. Marketplace payment initialization attaches the seller's subaccount, which routes 90% to the seller and 10% to the platform. A seller without a configured subaccount cannot initiate a marketplace payment. Regular meter top-ups continue to use the existing payment flow without a seller split.
+
+These endpoints require `PAYSTACK_SECRET_KEY` and a Paystack account enabled for Nigerian subaccounts. The database columns are added by the existing startup schema initialization from `src/init-db.sql`.
 
 ---
 
