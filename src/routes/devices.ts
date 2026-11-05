@@ -1,10 +1,10 @@
 import express, { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import pool from '../db.js';
-import { Transaction } from '../types/index.js';
-import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
+import { Device, Transaction } from '../types/index.js';
 
 const router = express.Router();
-const PRICE_PER_KWH = parseFloat(process.env.PRICE_PER_KWH || '200');
 
 router.get('/reset-offline', async (req: Request, res: Response) => {
   try {
@@ -19,11 +19,12 @@ router.get('/reset-offline', async (req: Request, res: Response) => {
 router.all('/reset-all', async (req: Request, res: Response) => {
   try {
     await pool.query('TRUNCATE TABLE transactions RESTART IDENTITY CASCADE;');
+    await pool.query('TRUNCATE TABLE paygo_tokens RESTART IDENTITY CASCADE;');
     await pool.query('TRUNCATE TABLE marketplace_purchases RESTART IDENTITY CASCADE;');
     await pool.query("UPDATE devices SET current_balance = 0, status = 'OFFLINE', last_seen_at = NULL, last_updated = NOW(); DELETE FROM devices WHERE device_id = 'reset-all';");
     return res.json({
       success: true,
-      message: "Successfully cleared all transactions and reset device balances to 0 kWh."
+      message: "Successfully cleared all transactions, tokens, and reset device balances to 0 kWh."
     });
   } catch (error: any) {
     console.error('Reset all error:', error);
@@ -31,92 +32,11 @@ router.all('/reset-all', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/mine', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-  if (!req.user) {
-    return res.status(401).json({ success: false, error: 'Authentication required.' });
-  }
-
-  try {
-    const result = await pool.query(
-      `SELECT d.device_id AS "deviceId", d.current_balance AS balance, d.status,
-              d.last_seen_at AS "lastSeenAt", d.last_updated AS "lastUpdated",
-              ud.is_selected AS "isSelected"
-       FROM user_devices ud
-       JOIN devices d ON d.device_id = ud.device_id
-       WHERE ud.user_id = $1 AND d.is_demo = false
-       ORDER BY ud.is_selected DESC, ud.linked_at ASC`,
-      [req.user.userId]
-    );
-
-    return res.json({
-      success: true,
-      devices: result.rows.map((device) => ({
-        ...device,
-        balance: Number(device.balance),
-        status: device.status || 'OFFLINE',
-      })),
-      selectedDeviceId: result.rows.find((device) => device.isSelected)?.deviceId ?? null,
-    });
-  } catch (error) {
-    console.error('Failed to retrieve account devices:', error);
-    return res.status(500).json({ success: false, error: 'Failed to retrieve account devices.' });
-  }
-});
-
-router.put('/mine/selected', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-  if (!req.user) {
-    return res.status(401).json({ success: false, error: 'Authentication required.' });
-  }
-
-  const deviceId = typeof req.body.deviceId === 'string' ? req.body.deviceId.trim() : '';
-  if (!deviceId) {
-    return res.status(400).json({ success: false, error: 'A device ID is required.' });
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const links = await client.query<{ device_id: string }>(
-      `SELECT ud.device_id
-       FROM user_devices ud
-       JOIN devices d ON d.device_id = ud.device_id
-       WHERE ud.user_id = $1 AND d.is_demo = false
-       FOR UPDATE OF ud`,
-      [req.user.userId]
-    );
-
-    if (!links.rows.some((link) => link.device_id === deviceId)) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ success: false, error: 'This meter is not linked to your account.' });
-    }
-
-    await client.query(
-      'UPDATE user_devices SET is_selected = (device_id = $1) WHERE user_id = $2',
-      [deviceId, req.user.userId]
-    );
-    await client.query('COMMIT');
-
-    return res.json({ success: true, selectedDeviceId: deviceId });
-  } catch (error) {
-    await client.query('ROLLBACK').catch((rollbackError) => {
-      console.error('Failed to rollback selected meter update:', rollbackError);
-    });
-    console.error('Failed to select account meter:', error);
-    return res.status(500).json({ success: false, error: 'Failed to select meter.' });
-  } finally {
-    client.release();
-  }
-});
-
-router.get('/:deviceId', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/:deviceId', async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   let client;
 
   try {
-    if (!req.user) {
-      return res.status(401).json({ success: false, error: 'Authentication required.' });
-    }
-
     const deviceId = req.params.deviceId as string;
 
     if (!deviceId || typeof deviceId !== 'string' || deviceId.trim().length < 3) {
@@ -124,16 +44,6 @@ router.get('/:deviceId', authenticateToken, async (req: AuthenticatedRequest, re
         success: false,
         error: 'Invalid device ID specification',
       });
-    }
-
-    if (req.user.role !== 'OWNER') {
-      const access = await pool.query(
-        'SELECT 1 FROM user_devices WHERE user_id = $1 AND device_id = $2',
-        [req.user.userId, deviceId]
-      );
-      if (access.rows.length === 0) {
-        return res.status(403).json({ success: false, error: 'This meter is not linked to your account.' });
-      }
     }
 
     // Acquire a dedicated connection thread to maintain atomicity across our dual queries
@@ -232,6 +142,44 @@ router.get('/:deviceId', authenticateToken, async (req: AuthenticatedRequest, re
       detail: error?.detail,
       hint: error?.hint,
     });
+  }
+});
+
+router.get('/:deviceId/tokens', async (req: Request, res: Response) => {
+  try {
+    const deviceId = req.params.deviceId as string;
+
+    if (!deviceId) {
+      return res.status(400).json({ success: false, error: 'Missing device ID' });
+    }
+
+    const result = await pool.query(
+      `SELECT id, kwh_amount, expires_at, used, auto_credited, transaction_id, created_at
+       FROM paygo_tokens 
+       WHERE device_id = $1 
+       ORDER BY created_at DESC 
+       LIMIT 10`,
+      [deviceId]
+    );
+
+    const tokens = result.rows.map((row) => ({
+      id: row.id,
+      kwhAmount: parseFloat(row.kwh_amount),
+      expiresAt: row.expires_at,
+      used: row.used,
+      autoCredited: row.auto_credited,
+      transactionId: row.transaction_id,
+      createdAt: row.created_at,
+    }));
+
+    return res.json({
+      success: true,
+      deviceId,
+      tokens,
+    });
+  } catch (error) {
+    console.error('Error fetching device tokens:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch tokens' });
   }
 });
 
@@ -342,18 +290,16 @@ const handleBalanceUpdate = async (req: Request, res: Response) => {
 
     if (kwhConsumed >= 0.001) {
       await client.query(
-        'INSERT INTO transactions (device_id, type, amount, kwh_amount, hardware_status) VALUES ($1, \'consumption\', $2, $3, \'CONFIRMED\')',
-        [deviceId, -(kwhConsumed * PRICE_PER_KWH), kwhConsumed]
+        'INSERT INTO transactions (device_id, type, amount, kwh_amount, hardware_status) VALUES ($1, \'consumption\', 0, $2, \'CONFIRMED\')',
+        [deviceId, kwhConsumed]
       );
     }
 
-    // A validated expected balance or an exact balance match confirms hardware has synced credits.
-    if (expected !== null || Math.abs(currentServerBalance - newBalance) <= EPSILON) {
-      await client.query(
-        'UPDATE transactions SET hardware_status = \'CONFIRMED\' WHERE device_id = $1 AND type = \'topup\' AND hardware_status = \'PENDING\'',
-        [deviceId]
-      );
-    }
+    // Mark any pending top-ups for this device as CONFIRMED since hardware is in active sync
+    await client.query(
+      'UPDATE transactions SET hardware_status = \'CONFIRMED\' WHERE device_id = $1 AND type = \'topup\' AND hardware_status = \'PENDING\'',
+      [deviceId]
+    );
 
     await client.query('COMMIT');
     client.release();
@@ -398,16 +344,6 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
       typeof remaining_balance === 'number' && isFinite(remaining_balance) && remaining_balance >= 0;
 
     if (hasHardwareBalance) {
-      await pool.query(
-        `UPDATE transactions
-         SET hardware_status = 'CONFIRMED'
-         WHERE device_id = $1 AND type = 'topup' AND hardware_status = 'PENDING'
-           AND ABS($2::numeric - (
-             SELECT current_balance FROM devices WHERE device_id = $1
-           )) <= 0.005`,
-        [deviceId, remaining_balance]
-      );
-
       // Hardware is authoritative — write its reported balance directly to the DB
       await pool.query(
         `INSERT INTO devices (device_id, current_balance, status, last_seen_at, last_updated)
@@ -526,8 +462,8 @@ router.post('/:deviceId/energy', async (req: Request, res: Response) => {
     );
 
     await client.query(
-      `INSERT INTO transactions (device_id, type, amount, kwh_amount) VALUES ($1, 'consumption', $2, $3)`,
-      [deviceId, -(kwhConsumed * PRICE_PER_KWH), kwhConsumed]
+      `INSERT INTO transactions (device_id, type, amount, kwh_amount) VALUES ($1, 'consumption', 0, $2)`,
+      [deviceId, kwhConsumed]
     );
 
     await client.query('COMMIT');
@@ -544,6 +480,91 @@ router.post('/:deviceId/energy', async (req: Request, res: Response) => {
     try { await client.query('ROLLBACK'); } catch (_) {}
     client.release();
     console.error('Hardware energy report error:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Server error' });
+  }
+});
+
+// 4. Keypad Token Redemption via HTTP
+router.post('/:deviceId/redeem', async (req: Request, res: Response) => {
+  const deviceId = req.params.deviceId as string;
+  const { code } = req.body;
+
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ success: false, error: 'Missing token code' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      `SELECT id, token_hash, kwh_amount, auto_credited, transaction_id 
+       FROM paygo_tokens 
+       WHERE device_id = $1 AND used = false AND expires_at > NOW()
+       ORDER BY created_at DESC 
+       FOR UPDATE`,
+      [deviceId]
+    );
+
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ success: false, error: 'No valid tokens found' });
+    }
+
+    let matchedTokenRow: any = null;
+    for (const row of result.rows) {
+      const isMatch = await bcrypt.compare(code, row.token_hash);
+      if (isMatch) {
+        matchedTokenRow = row;
+        break;
+      }
+    }
+
+    if (!matchedTokenRow) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(400).json({ success: false, error: 'Invalid or expired token code' });
+    }
+
+    const tokenId = matchedTokenRow.id;
+    const kwhAmount = parseFloat(matchedTokenRow.kwh_amount);
+    const autoCredited = matchedTokenRow.auto_credited === true;
+    const txId = matchedTokenRow.transaction_id || `TXN_${crypto.randomUUID().substring(0, 8).toUpperCase()}`;
+
+    await client.query(`UPDATE paygo_tokens SET used = true, redeemed_at = NOW() WHERE id = $1`, [tokenId]);
+
+    let newBalance = 0;
+    if (autoCredited) {
+      const devRes = await client.query('SELECT current_balance FROM devices WHERE device_id = $1', [deviceId]);
+      newBalance = devRes.rows.length > 0 ? parseFloat(devRes.rows[0].current_balance) : 0;
+    } else {
+      const updateRes = await client.query(
+        `UPDATE devices SET current_balance = current_balance + $1, status = 'ONLINE', last_seen_at = NOW(), last_updated = NOW() WHERE device_id = $2 RETURNING current_balance`,
+        [kwhAmount, deviceId]
+      );
+      newBalance = parseFloat(updateRes.rows[0].current_balance);
+      await client.query(
+        `INSERT INTO transactions (device_id, type, amount, kwh_amount, transaction_id, hardware_status, last_attempt_at)
+         VALUES ($1, 'topup', 0, $2, $3, 'CONFIRMED', NOW())`,
+        [deviceId, kwhAmount, txId]
+      );
+    }
+
+    await client.query('COMMIT');
+    client.release();
+
+    return res.json({
+      success: true,
+      message: `${kwhAmount} kWh credited successfully`,
+      kwhAdded: kwhAmount,
+      balance: newBalance,
+      relayAction: 'OPEN',
+    });
+  } catch (err: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    client.release();
+    console.error('Hardware redeem error:', err);
     return res.status(500).json({ success: false, error: err?.message || 'Server error' });
   }
 });

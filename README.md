@@ -1,6 +1,6 @@
 # ⚡ PAYGO Backend - Solar Energy Metering & Billing System
 
-A robust backend service built with **Node.js**, **Express.js**, **TypeScript**, **PostgreSQL**, and **MQTT**. This server powers the PAYGO solar energy platform, featuring **Automatic Remote Recharge**, Paystack payment webhooks, hardware ACK status tracking (`PENDING` | `CONFIRMED` | `FAILED`), device online/offline monitoring, and real-time meter crediting over secure MQTT.
+A robust, enterprise-grade backend service built with **Node.js**, **Express.js**, **TypeScript**, **PostgreSQL**, and **MQTT**. This server powers the PAYGO (Pay-As-You-Go) solar energy trading and metering platform, featuring **Automatic Remote Recharge**, Paystack payment webhooks, cryptographic token generation, hardware ACK status tracking (`PENDING` | `CONFIRMED` | `FAILED`), device online/offline monitoring, and real-time hardware meter balance crediting over secure MQTT (HiveMQ Cloud TLS).
 
 ---
 
@@ -20,7 +20,6 @@ A robust backend service built with **Node.js**, **Express.js**, **TypeScript**,
 - [API Reference](#-api-reference)
   - [Health Check](#health-check)
   - [Payment Initiation](#payment-initiation)
-  - [Marketplace Seller Payouts](#marketplace-seller-payouts)
   - [Paystack Webhook](#paystack-webhook)
   - [Device Profile & Status](#device-profile--status)
   - [Transaction Verification](#transaction-verification)
@@ -29,6 +28,7 @@ A robust backend service built with **Node.js**, **Express.js**, **TypeScript**,
   - [Remote Credit Command](#remote-credit-command)
   - [Hardware ACK Response](#hardware-ack-response)
   - [Device Status & Heartbeat](#device-status--heartbeat)
+  - [Fallback Token Redemption](#fallback-token-redemption)
 - [Security & Reliability Features](#-security--reliability-features)
 
 ---
@@ -36,17 +36,17 @@ A robust backend service built with **Node.js**, **Express.js**, **TypeScript**,
 ## ✨ Features
 
 - **Automatic Remote Recharge**: Paystack payments automatically credit the database balance (`devices.current_balance`) and dispatch an instant MQTT `CREDIT` command directly to the physical ESP32 meter.
-- **Post-Commit Execution Safety**: Database transaction (`BEGIN` ➔ balance update ➔ transaction log ➔ `COMMIT`) completes **first** before publishing MQTT messages.
-- **Hardware Credit Status Tracking**: `transactions.hardware_status` explicitly tracks physical execution state (`PENDING` | `CONFIRMED` | `FAILED`), updating to `CONFIRMED` on an ESP32 `CREDIT_ACK` or a matching hardware balance sync.
+- **Post-Commit Execution Safety**: Database transaction (`BEGIN` ➔ balance update ➔ transaction log ➔ token creation ➔ `COMMIT`) completes **first** before publishing MQTT messages.
+- **Hardware Credit Status Tracking**: `transactions.hardware_status` explicitly tracks physical execution state (`PENDING` | `CONFIRMED` | `FAILED`), updating to `CONFIRMED` only when the ESP32 returns a `CREDIT_ACK` message.
 - **Internal Transaction ID Idempotency**: Each top-up assigns a unique internal `transactionId` (`TXN_XXXXXXXX`). The ESP32 tracks processed transaction IDs persistently to prevent duplicate crediting.
 - **Paystack Webhook Idempotency**: DB-level `reference VARCHAR(255) UNIQUE` constraint prevents duplicate processing of retried Paystack webhooks.
 - **Money vs. Energy Separation**: Explicitly stores both `amount` (financial value paid in Naira) and `kwh_amount` (energy units purchased in kWh).
 - **Local Energy Marketplace Engine**: Powers peer-to-peer energy trading with a Haversine geographical distance matching engine. Buyers can discover sellers within a specific service radius, while the backend enforces strict idempotency and `reserved_kwh` locks to prevent race conditions during purchase.
-- **Marketplace Seller Settlements**: Sellers can connect a Paystack-verified Nigerian bank account. Marketplace payments split 90% to the seller subaccount and 10% to the platform; buyer meter top-ups are not split.
-- **Energy Consumption Ledger**: Records reported consumption as a Naira debit and kWh usage, rather than a zero-value credit.
+- **Fallback Recovery Token Engine**: Generates 16-digit fallback tokens marked `auto_credited = true`. Manual token entry checks financial status first, skipping DB balance re-addition while re-dispatching hardware commands.
 - **Throttled Retry & Reconnect Engine**: Retries pending hardware credit commands when an ESP32 reconnects or sends heartbeats, respecting backoff delays (`last_attempt_at > 15s`).
 - **Device Online/Offline Monitoring**: Automatically updates device connectivity state (`status: ONLINE/OFFLINE`, `last_seen_at`) upon receiving hardware messages.
 - **HMAC-SHA512 Webhook Security**: Raw request body interception and HMAC-SHA512 signature validation to prevent unauthorized webhook spoofing.
+- **SMS Token Dispatch**: Dispatches fallback token codes to customer mobile numbers via Termii SMS API.
 
 ---
 
@@ -60,6 +60,7 @@ sequenceDiagram
     participant PS as Paystack Gateway
     participant API as Express Backend
     participant DB as PostgreSQL DB
+    participant SMS as Termii SMS API
     participant Broker as HiveMQ MQTT Cloud
     participant ESP as ESP32 Hardware Meter
 
@@ -73,8 +74,9 @@ sequenceDiagram
     API->>API: Verify Signature & Generate Internal transactionId (TXN_XXX)
 
     note over API,DB: STEP 1: COMMIT DB FINANCIAL CREDIT FIRST
-    API->>DB: BEGIN TX: Add kWh to devices.balance, Insert Tx (hardware_status=PENDING)
+    API->>DB: BEGIN TX: Add kWh to devices.balance, Insert Tx (hardware_status=PENDING), Insert Fallback Token
     API->>DB: COMMIT TX
+    API->>SMS: Send Fallback Token via SMS
 
     note over API,ESP: STEP 2: POST-COMMIT MQTT DISPATCH & ACK
     API->>Broker: Publish paygo/device/{id}/command {action: CREDIT, transactionId, kwh}
@@ -86,7 +88,7 @@ sequenceDiagram
         Broker->>API: Deliver CREDIT_ACK
         API->>DB: UPDATE transactions SET hardware_status = 'CONFIRMED'
     else ESP32 Offline
-        Note over API,ESP: hardware_status remains PENDING. Auto-retry when the device reconnects.
+        Note over API,ESP: hardware_status remains PENDING. Auto-retry on device reconnect or fallback token entry.
     end
 ```
 
@@ -126,13 +128,14 @@ backend/
     │   ├── middleware.ts # Request logger, 404 handler, global error handler
     │   └── authMiddleware.ts # JWT authentication & role guard middleware
     ├── routes/
-    │   ├── auth.ts       # /api/auth/register, /login, /become-seller, /me, /logout endpoints
+    │   ├── auth.ts       # /api/auth/register, /login, /me, /logout endpoints
     │   ├── payment.ts    # /api/payment/initiate endpoint
     │   ├── webhook.ts    # /api/webhook/paystack HMAC-verified remote recharge handler
     │   ├── devices.ts    # /api/devices/:deviceId profile, status & transactions endpoint
     │   ├── marketplace.ts # /api/marketplace endpoints for haversine matching & energy purchases
     │   └── transactions.ts # /api/transactions/verify/:reference lookup endpoint
     ├── services/
+    │   └── sms.ts        # Termii SMS delivery service with fallback logger
     └── types/
         └── index.ts      # TypeScript interfaces and payload type definitions
 ```
@@ -176,7 +179,27 @@ Authoritative ledger for financial payments, energy consumption, and hardware ex
 
 **Indexes**: `idx_transactions_device_id`, `idx_transactions_tx_id`, `idx_transactions_ref`
 
-### 3. `marketplace_sources` & `marketplace_listings`
+### 3. `paygo_tokens`
+
+Stores generated fallback recovery tokens.
+
+| Column               | Type            | Constraints     | Description                                       |
+| :------------------- | :-------------- | :-------------- | :------------------------------------------------ |
+| `id`                 | `SERIAL`        | `PRIMARY KEY`   | Identifier                                        |
+| `buyer_email`        | `VARCHAR(255)`  | `NOT NULL`      | Purchaser email address                           |
+| `device_id`          | `VARCHAR(50)`   | `NOT NULL`      | Associated meter ID                               |
+| `kwh_amount`         | `DECIMAL(10,2)` | `NOT NULL`      | Energy units in kWh                               |
+| `token_hash`         | `VARCHAR(255)`  | `NOT NULL`      | Bcrypt hash of 16-digit token code                |
+| `transaction_id`     | `VARCHAR(100)`  | `NULL`          | Associated internal transaction ID                |
+| `paystack_reference` | `VARCHAR(255)`  | `UNIQUE`        | Paystack reference                                |
+| `auto_credited`      | `BOOLEAN`       | `DEFAULT FALSE` | Flag indicating if DB was credited during payment |
+| `used`               | `BOOLEAN`       | `DEFAULT FALSE` | Flag indicating if fallback token was redeemed    |
+| `expires_at`         | `TIMESTAMP`     | `NOT NULL`      | Token expiration date (72h)                       |
+| `redeemed_at`        | `TIMESTAMP`     | `NULL`          | Redemption timestamp                              |
+
+**Indexes**: `idx_tokens_device_id`, `idx_tokens_used`, `idx_tokens_expires_at`
+
+### 4. `marketplace_sources` & `marketplace_listings`
 Manages local energy sellers and available energy inventory.
 
 | Table | Description |
@@ -233,17 +256,6 @@ MQTT_PASS=YourMqttPassword
 psql -U postgres -d paygo_db -f src/init-db.sql
 ```
 
-For an existing database, apply the additive migration before deploying marketplace changes:
-
-```bash
-psql -U postgres -d paygo_db -f migrations/20261105_mark_device_001_demo.sql
-```
-
-This marks the shared `DEVICE-001` prototype meter as demo-only without deleting its
-source, listings, purchases, or history. Marketplace discovery and purchases exclude
-demo meters. A rollback is available at
-[`migrations/rollback/20261105_mark_device_001_demo.sql`](migrations/rollback/20261105_mark_device_001_demo.sql).
-
 ### Installation
 
 ```bash
@@ -279,24 +291,9 @@ Handles incoming Paystack payment webhooks with automatic remote credit.
   1. Validates signature against raw request body.
   2. Verifies idempotency against `transactions.reference`.
   3. Generates internal `transaction_id` (`TXN_XXXXXXXX`).
-  4. Commits DB balance addition (`devices.current_balance += kwhAmount`) and creates a transaction (`hardware_status = 'PENDING'`).
+  4. Commits DB balance addition (`devices.current_balance += kwhAmount`), creates transaction (`hardware_status = 'PENDING'`), and creates fallback token (`auto_credited = true`).
   5. Post-commit: publishes `CREDIT` command over MQTT.
-
-Payment verification returns the transaction's current `hardwareStatus`; it does not generate or return a manual fallback token.
-
----
-
-### Marketplace Seller Payouts
-
-Authenticated seller-capable accounts can configure a Paystack subaccount for marketplace settlements. Existing buyers can enable seller capability on the same account with `POST /api/auth/become-seller`; this does not change their account role or assign a meter.
-
-- `GET /api/marketplace/payout-account/banks` — list active Nigerian payout banks (seller capability required).
-- `GET /api/marketplace/payout-account` — return the saved, masked payout-account details.
-- `PUT /api/marketplace/payout-account` — verify a 10-digit bank account with Paystack and create or update the seller subaccount. The request body contains `businessName`, `bankCode`, and `accountNumber`.
-
-The backend stores the Paystack subaccount code, bank name, verified account name, and last four account-number digits; the full account number is sent to Paystack for verification and subaccount setup, not stored by PayGo. Marketplace payment initialization attaches the seller's subaccount, which routes 90% to the seller and 10% to the platform. A seller without a configured subaccount cannot initiate a marketplace payment. Regular meter top-ups continue to use the existing payment flow without a seller split.
-
-These endpoints require `PAYSTACK_SECRET_KEY` and a Paystack account enabled for Nigerian subaccounts. The database columns are added by the existing startup schema initialization from `src/init-db.sql`.
+  6. Sends SMS with fallback token code.
 
 ---
 
@@ -348,6 +345,7 @@ Discovers active energy listings within a geographical radius using the Haversin
 | **Hardware ➔ Backend** | `paygo/device/{deviceId}/ack`     | Execution ACK confirmations       |
 | **Hardware ➔ Backend** | `paygo/device/{deviceId}/status`  | Device heartbeats & online status |
 | **Hardware ➔ Backend** | `paygo/device/{deviceId}/energy`  | Energy consumption reports        |
+| **Hardware ➔ Backend** | `paygo/device/{deviceId}/redeem`  | Keypad fallback token redemption  |
 
 ---
 

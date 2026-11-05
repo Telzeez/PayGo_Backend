@@ -1,18 +1,17 @@
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 import pool from '../db.js';
+import { sendSms } from './sms.js';
 import mqttService from '../mqtt-client.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+const SALT_ROUNDS: number = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
+const TOKEN_EXPIRY_HOURS: number = parseInt(process.env.TOKEN_EXPIRY_HOURS || '72', 10);
 const PRICE_PER_KWH: number = parseFloat(process.env.PRICE_PER_KWH || '200');
 
-export async function processSuccessfulPayment(
-  reference: string,
-  amountPaid: number,
-  deviceId: string,
-  marketplacePurchaseId?: number
-): Promise<boolean> {
+export async function processSuccessfulPayment(reference: string, buyerEmail: string, amountPaid: number, deviceId: string): Promise<boolean> {
   const client = await pool.connect();
 
   try {
@@ -35,6 +34,15 @@ export async function processSuccessfulPayment(
     const kwhAmount: number = amountPaid / PRICE_PER_KWH;
     const txId = `TXN_${crypto.randomUUID().substring(0, 8).toUpperCase()}`;
 
+    const tokenCode: string = (
+      crypto.randomInt(10000000, 99999999).toString() + 
+      crypto.randomInt(10000000, 99999999).toString()
+    );
+    const hashedToken: string = await bcrypt.hash(tokenCode, SALT_ROUNDS);
+
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + TOKEN_EXPIRY_HOURS);
+
     // STEP 3: Financial Credit to DB Balance (Upsert device)
     await client.query(
       `INSERT INTO devices (device_id, current_balance, last_updated)
@@ -53,17 +61,16 @@ export async function processSuccessfulPayment(
         [deviceId, amountPaid, kwhAmount, txId, reference]
       );
 
-      if (marketplacePurchaseId !== undefined) {
-        const mktRes = await client.query(
-          `SELECT id, listing_id, kwh_requested
-           FROM marketplace_purchases
-           WHERE id = $1 AND device_id = $2 AND amount = $3 AND status = 'RESERVED'
-           FOR UPDATE`,
-          [marketplacePurchaseId, deviceId, amountPaid]
-        );
-        if (mktRes.rows.length === 0) {
-          throw new Error(`Marketplace purchase ${marketplacePurchaseId} is not valid for this payment`);
-        }
+      // Settle any reserved marketplace purchase tied to this device & buyer
+      const mktRes = await client.query(
+        `SELECT id, listing_id, kwh_requested 
+         FROM marketplace_purchases 
+         WHERE device_id = $1 AND status = 'RESERVED' 
+         ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+        [deviceId]
+      );
+
+      if (mktRes.rows.length > 0) {
         const mktPurchase = mktRes.rows[0];
         const kwhReq = parseFloat(mktPurchase.kwh_requested);
 
@@ -99,7 +106,29 @@ export async function processSuccessfulPayment(
       throw dbError;
     }
 
-    // Commit the payment before dispatching the remote hardware credit.
+    // STEP 5: Insert fallback token record
+    await client.query(
+      `INSERT INTO paygo_tokens 
+       (buyer_email, device_id, kwh_amount, token_hash, raw_token, expires_at, used, paystack_reference, transaction_id, auto_credited) 
+       VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, true)`,
+      [buyerEmail, deviceId, kwhAmount, hashedToken, tokenCode, expiresAt, reference, txId]
+    );
+
+    // Fetch the user's phone number for SMS delivery
+    const userRes = await client.query('SELECT phone FROM users WHERE email = $1', [buyerEmail]);
+    let phoneNumber = '';
+    if (userRes.rows.length > 0 && userRes.rows[0].phone) {
+      phoneNumber = userRes.rows[0].phone.replace('+', ''); // Termii expects format without '+'
+    }
+
+    // STEP 6: Send SMS notification
+    if (phoneNumber) {
+      await sendSms(phoneNumber, tokenCode);
+    } else {
+      console.warn(`No phone number configured for ${buyerEmail}. Skipping SMS.`);
+    }
+
+    // STEP 7: COMMIT THE TRANSACTION BEFORE MQTT PUBLISHING
     await client.query('COMMIT');
     client.release();
 

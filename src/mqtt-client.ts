@@ -1,12 +1,11 @@
 import mqtt, { MqttClient } from 'mqtt';
+import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import pool from './db.js';
-import { MqttCreditCommand, MqttCreditAck } from './types/index.js';
+import { MqttRedeemPayload, MqttCreditCommand, MqttCreditAck, MqttResponsePayload } from './types/index.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-const PRICE_PER_KWH = parseFloat(process.env.PRICE_PER_KWH || '200');
 
 class MqttService {
   private client: MqttClient | null = null;
@@ -38,13 +37,13 @@ class MqttService {
       lastMqttErrorMsg = '';
       
       this.client?.subscribe(
-        ['paygo/device/+/energy', 'paygo/device/+/ack', 'paygo/device/+/status'],
+        ['paygo/device/+/redeem', 'paygo/device/+/energy', 'paygo/device/+/ack', 'paygo/device/+/status'],
         { qos: 1 },
         (err) => {
           if (err) {
             console.error('❌ MQTT Subscription error:', err);
           } else {
-            console.log('📡 Subscribed to streams: energy, ack, status');
+            console.log('📡 Subscribed to streams: redeem, energy, ack, status');
           }
         }
       );
@@ -80,6 +79,8 @@ class MqttService {
 
       if (topic.includes('/ack') && (payload.action === 'CREDIT_ACK' || payload.status === 'ACCEPTED' || payload.status === 'REJECTED')) {
         await this.handleCreditAck(deviceId, payload as MqttCreditAck);
+      } else if (topic.includes('/redeem') && payload.code) {
+        await this.handleRedemption(deviceId, payload.code);
       } else if (topic.includes('/energy') && typeof payload.wh_consumed === 'number') {
         await this.handleEnergyReport(deviceId, payload.wh_consumed);
       }
@@ -210,8 +211,8 @@ class MqttService {
       );
 
       await client.query(
-        `INSERT INTO transactions (device_id, type, amount, kwh_amount) VALUES ($1, 'consumption', $2, $3)`,
-        [deviceId, -(kwhConsumed * PRICE_PER_KWH), kwhConsumed]
+        `INSERT INTO transactions (device_id, type, amount, kwh_amount) VALUES ($1, 'consumption', 0, $2)`,
+        [deviceId, kwhConsumed]
       );
 
       await client.query('COMMIT');
@@ -239,6 +240,125 @@ class MqttService {
       client.release();
       console.error(`Error processing energy report for ${deviceId}:`, error);
     }
+  }
+
+  private async handleRedemption(deviceId: string, tokenCode: string): Promise<void> {
+    const client = await pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+
+      const result = await client.query(
+        `SELECT id, token_hash, kwh_amount, auto_credited, transaction_id 
+         FROM paygo_tokens 
+         WHERE device_id = $1 AND used = false AND expires_at > NOW()
+         ORDER BY created_at DESC 
+         FOR UPDATE`, 
+        [deviceId]
+      );
+
+      if (result.rows.length === 0) {
+        await client.query('ROLLBACK');
+        client.release();
+        this.publishResponse(deviceId, 'ERROR', 'No valid tokens found');
+        return;
+      }
+
+      let matchedTokenRow = null;
+
+      for (const row of result.rows) {
+        const isMatch: boolean = await bcrypt.compare(tokenCode, row.token_hash);
+        if (isMatch) {
+          matchedTokenRow = row;
+          break; 
+        }
+      }
+
+      if (!matchedTokenRow) {
+        await client.query('ROLLBACK');
+        client.release();
+        this.publishResponse(deviceId, 'ERROR', 'Invalid or expired token');
+        return;
+      }
+
+      const tokenId = matchedTokenRow.id;
+      const kwhAmount = parseFloat(matchedTokenRow.kwh_amount);
+      const autoCredited = matchedTokenRow.auto_credited === true;
+      const txId = matchedTokenRow.transaction_id || `TXN_${crypto.randomUUID().substring(0, 8).toUpperCase()}`;
+
+      const deviceLock = await client.query(
+        `SELECT current_balance FROM devices WHERE device_id = $1 FOR UPDATE`,
+        [deviceId]
+      );
+
+      if (deviceLock.rows.length === 0) {
+        await client.query('ROLLBACK');
+        client.release();
+        this.publishResponse(deviceId, 'ERROR', 'Device record not found');
+        return;
+      }
+
+      await client.query(
+        `UPDATE paygo_tokens SET used = true, redeemed_at = NOW() WHERE id = $1`,
+        [tokenId]
+      );
+
+      if (autoCredited) {
+        // DB balance was ALREADY updated when webhook ran. Do NOT add balance again!
+        await client.query('COMMIT');
+        client.release();
+
+        await this.publishCreditCommand(deviceId, kwhAmount, txId);
+
+        this.publishResponse(deviceId, 'SUCCESS', `${kwhAmount} kWh credited (Recovery mode)`);
+        console.log(`✅ Fallback token redeemed for ${deviceId}: ${kwhAmount} kWh (DB balance already credited)`);
+        return;
+      }
+
+      // Legacy or manual token insertion without prior auto credit
+      await client.query(
+        `UPDATE devices SET current_balance = current_balance + $1, last_updated = NOW() WHERE device_id = $2`,
+        [kwhAmount, deviceId]
+      );
+
+      await client.query(
+        `INSERT INTO transactions (device_id, type, amount, kwh_amount, transaction_id, hardware_status, last_attempt_at) 
+         VALUES ($1, 'topup', 0, $2, $3, 'PENDING', NOW())`,
+        [deviceId, kwhAmount, txId]
+      );
+
+      await client.query('COMMIT');
+      client.release();
+
+      await this.publishCreditCommand(deviceId, kwhAmount, txId);
+
+      this.publishResponse(deviceId, 'SUCCESS', `${kwhAmount} kWh added`);
+      console.log(`✅ Manual Token redeemed for ${deviceId}: ${kwhAmount} kWh`);
+
+    } catch (error) {
+      console.error('CRITICAL: Redemption transaction aborted. Rolling back alterations.', error);
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('Failed to issue transaction abort command:', rollbackErr);
+      }
+      client.release();
+      this.publishResponse(deviceId, 'ERROR', 'Server processing error');
+    }
+  }
+
+  private publishResponse(deviceId: string, status: 'SUCCESS' | 'ERROR', message: string): void {
+    const payload: MqttResponsePayload = {
+      status,
+      message,
+      timestamp: new Date().toISOString(),
+    };
+
+    this.client?.publish(
+      `paygo/device/${deviceId}/response`,
+      JSON.stringify(payload),
+      { qos: 1 }
+    );
   }
 
   public disconnect(): void {

@@ -23,7 +23,6 @@ export interface EnergySource {
   longitude: number;
   serviceRadiusMeters: number;
   status: SourceStatus;
-  isDemo?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,8 +35,6 @@ export interface EnergyListing {
   reservedKwh: number;
   pricePerKwh: number;
   status: ListingStatus;
-  isDemo?: boolean;
-  sourceName?: string;
   expiresAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -66,6 +63,7 @@ export interface NearbyListingItem {
   sourceName: string;
   sellerId: number;
   sellerEmail?: string;
+  deviceId: string;
   distanceMeters: number;
   effectiveRadiusMeters: number;
   availableKwh: number;

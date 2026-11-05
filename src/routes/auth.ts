@@ -14,20 +14,6 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '72h';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-const normalizeAccountRole = (requestedRole?: string) => {
-  const normalized = String(requestedRole || 'BUYER').trim().toUpperCase();
-
-  if (normalized === 'ADMIN' || normalized === 'PLATFORM_ADMIN') {
-    throw new Error('Platform administrator accounts cannot be created through public registration.');
-  }
-
-  if (normalized === 'SELLER' || normalized === 'OWNER') {
-    return { role: 'USER', isBuyer: true, isSeller: true };
-  }
-
-  return { role: 'USER', isBuyer: true, isSeller: false };
-};
-
 // ==========================================
 // 1. REGISTER NEW USER (BUYER OR OWNER)
 // ==========================================
@@ -49,15 +35,9 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    let assignedRole = 'USER';
-    let isBuyer = true;
-    let isSeller = false;
-    try {
-      ({ role: assignedRole, isBuyer, isSeller } = normalizeAccountRole((req.body as RegisterRequest).role));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Invalid account role';
-      return res.status(400).json({ success: false, error: message });
-    }
+    const assignedRole = 'USER';
+    const isBuyer = true;
+    const isSeller = false;
     const normalizedEmail = email.trim().toLowerCase();
 
     // Check if user already exists
@@ -303,15 +283,9 @@ router.post('/register-google', async (req: Request, res: Response) => {
       return res.status(409).json({ success: false, error: 'User with this email already exists' });
     }
 
-    let normalizedRole;
-    try {
-      normalizedRole = normalizeAccountRole(role);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Invalid account role';
-      return res.status(400).json({ success: false, error: message });
-    }
-
-    const { role: assignedRole, isBuyer, isSeller } = normalizedRole;
+    const isBuyer = role === 'BUYER';
+    const isSeller = role === 'OWNER';
+    const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
 
     const insertResult = await pool.query(
       `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller) 
@@ -350,54 +324,6 @@ router.post('/register-google', async (req: Request, res: Response) => {
       success: false,
       error: 'Internal server error during Google registration',
     });
-  }
-});
-
-// ==========================================
-// 2.7 ENABLE SELLER CAPABILITY ON THE EXISTING ACCOUNT
-// ==========================================
-router.post('/become-seller', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-  if (!req.user) {
-    return res.status(401).json({ success: false, error: 'Authentication required' });
-  }
-
-  try {
-    const result = await pool.query(
-      `UPDATE users
-       SET is_seller = true, is_buyer = true, updated_at = NOW()
-       WHERE id = $1
-       RETURNING id, email, phone, role, is_buyer, is_seller`,
-      [req.user.userId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Account not found.' });
-    }
-
-    const user = result.rows[0];
-    const tokenPayload: JwtPayload = {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      isBuyer: user.is_buyer,
-      isSeller: user.is_seller,
-    };
-    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
-
-    return res.json({
-      success: true,
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        isBuyer: user.is_buyer,
-        isSeller: user.is_seller,
-      },
-    });
-  } catch (error) {
-    console.error('Enable seller capability failed:', error);
-    return res.status(500).json({ success: false, error: 'Unable to enable seller features.' });
   }
 });
 

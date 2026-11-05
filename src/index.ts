@@ -1,13 +1,13 @@
 import app from './app.js';
 import dotenv from 'dotenv';
-import fs from 'node:fs';
-import path from 'node:path';
+import fs from 'fs';
+import path from 'path';
 import pool from './db.js';
 import './mqtt-client.js';  // Auto-connects when imported
 
 dotenv.config();
 
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'url';
 
 // Auto-initialize DB schema on startup
 const initDb = async () => {
@@ -34,9 +34,9 @@ const initDb = async () => {
   }
 };
 
-await initDb();
+initDb();
 
-const PORT: number = Number.parseInt(process.env.PORT || '3001', 10);
+const PORT: number = parseInt(process.env.PORT || '3001', 10);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

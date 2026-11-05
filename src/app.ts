@@ -6,7 +6,6 @@ import authRoutes from './routes/auth.js';
 import webhookRoutes from './routes/webhook.js';
 import paymentRoutes from './routes/payment.js';
 import deviceRoutes from './routes/devices.js';
-import adminDeviceRoutes from './routes/adminDevices.js';
 import transactionRoutes from './routes/transactions.js';
 import marketplaceRoutes from './routes/marketplace.js';
 
@@ -37,7 +36,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/devices', deviceRoutes);
-app.use('/api/admin/devices', adminDeviceRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 

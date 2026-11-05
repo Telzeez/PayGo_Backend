@@ -43,6 +43,20 @@ export interface JwtPayload {
     isSeller: boolean;
 }
 
+export interface PaygoToken {
+    id: number;
+    buyerEmail: string;
+    deviceId: string;
+    kwhAmount: number;
+    tokenHash: string;
+    transactionId?: string;
+    paystackReference?: string;
+    autoCredited?: boolean;
+    createdAt: Date;
+    expiresAt: Date;
+    used: boolean;
+    redeemedAt: Date | null;
+}
 export interface Device {
     id: number;
     deviceId: string;
@@ -69,7 +83,9 @@ export interface PaymentInitialRequest {
     amount: number;
     email: string;
     deviceId: string;
-    marketplacePurchaseId?: number;
+}
+export interface MqttRedeemPayload {
+    code: string;
 }
 export interface MqttCreditCommand {
     action: 'CREDIT';
@@ -89,12 +105,17 @@ export interface MqttCreditAck {
     timestamp: string;
 }
 
+export interface MqttResponsePayload {
+    status: 'SUCCESS' | 'ERROR';
+    message: string;
+    timestamp: string;
+}
 export interface PaystackWebhookEvent {
     event: 'charge.success' | 'charge.failed';
     data: {
         amount: number;
         customer: {email: string};
-        metadata: {deviceId?: string; deviceid?: string; marketplacePurchaseId?: number | string};
+        metadata: {deviceId?: string; deviceid?: string};
         reference: string
     }
 }
