@@ -14,6 +14,20 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '72h';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
+const normalizeAccountRole = (requestedRole?: string) => {
+  const normalized = String(requestedRole || 'BUYER').trim().toUpperCase();
+
+  if (normalized === 'ADMIN' || normalized === 'PLATFORM_ADMIN') {
+    throw new Error('Platform administrator accounts cannot be created through public registration.');
+  }
+
+  if (normalized === 'SELLER' || normalized === 'OWNER') {
+    return { role: 'USER', isBuyer: true, isSeller: true };
+  }
+
+  return { role: 'USER', isBuyer: true, isSeller: false };
+};
+
 // ==========================================
 // 1. REGISTER NEW USER (BUYER OR OWNER)
 // ==========================================
@@ -35,9 +49,15 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    const assignedRole = 'USER';
-    const isBuyer = true;
-    const isSeller = false;
+    let assignedRole = 'USER';
+    let isBuyer = true;
+    let isSeller = false;
+    try {
+      ({ role: assignedRole, isBuyer, isSeller } = normalizeAccountRole((req.body as RegisterRequest).role));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid account role';
+      return res.status(400).json({ success: false, error: message });
+    }
     const normalizedEmail = email.trim().toLowerCase();
 
     // Check if user already exists
@@ -283,9 +303,15 @@ router.post('/register-google', async (req: Request, res: Response) => {
       return res.status(409).json({ success: false, error: 'User with this email already exists' });
     }
 
-    const isBuyer = role === 'BUYER';
-    const isSeller = role === 'OWNER';
-    const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
+    let normalizedRole;
+    try {
+      normalizedRole = normalizeAccountRole(role);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid account role';
+      return res.status(400).json({ success: false, error: message });
+    }
+
+    const { role: assignedRole, isBuyer, isSeller } = normalizedRole;
 
     const insertResult = await pool.query(
       `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller) 

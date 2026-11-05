@@ -31,7 +31,11 @@ export const authenticateToken = (req: AuthenticatedRequest, res: Response, next
   }
 };
 
-export const requireRole = (allowedRoles: Array<'BUYER' | 'OWNER' | 'SELLER'>) => {
+export type AppRole = 'BUYER' | 'SELLER' | 'USER' | 'OWNER' | 'PLATFORM_ADMIN';
+
+export const normalizeUserRole = (role?: string): string => (role || 'USER').trim().toUpperCase();
+
+export const requireRole = (allowedRoles: AppRole[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({
@@ -40,10 +44,14 @@ export const requireRole = (allowedRoles: Array<'BUYER' | 'OWNER' | 'SELLER'>) =
       });
     }
 
-    const hasBuyer = allowedRoles.includes('BUYER') && req.user.isBuyer;
-    const hasSeller = allowedRoles.includes('SELLER') && req.user.isSeller;
+    const normalizedUserRole = normalizeUserRole(req.user.role);
+    const hasBuyer = allowedRoles.includes('BUYER') && Boolean(req.user.isBuyer);
+    const hasSeller = allowedRoles.includes('SELLER') && Boolean(req.user.isSeller);
+    const hasExplicitRole = allowedRoles.includes(normalizedUserRole as AppRole);
+    const hasLegacyOwnerAccess = normalizedUserRole === 'OWNER' && allowedRoles.includes('OWNER');
+    const hasPlatformAdminAccess = normalizedUserRole === 'PLATFORM_ADMIN' && allowedRoles.includes('PLATFORM_ADMIN');
 
-    if (hasBuyer || hasSeller || allowedRoles.includes(req.user.role as any)) {
+    if (hasBuyer || hasSeller || hasExplicitRole || hasLegacyOwnerAccess || hasPlatformAdminAccess) {
       return next();
     }
 
