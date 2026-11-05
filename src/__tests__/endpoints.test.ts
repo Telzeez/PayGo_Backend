@@ -157,6 +157,125 @@ describe('PAYGO API Endpoint Test Suite', () => {
     });
   });
 
+  describe('POST /api/marketplace/listings/:id/purchase', () => {
+    const authorization = () => 'Bearer ' + createAuthToken();
+    const requestBody = (buyerDeviceId: string) => ({
+      kwhRequested: 2,
+      buyerLatitude: 7.44,
+      buyerLongitude: 3.9,
+      buyerDeviceId,
+    });
+
+    it('captures the explicitly selected buyer meter, not the seller source meter', async () => {
+      const originalConnect = pool.connect;
+      const statements: Array<{ sql: string; params?: unknown[] }> = [];
+      (pool as any).connect = async () => ({
+        query: async (sql: string, params?: unknown[]) => {
+          statements.push({ sql, params });
+          if (sql.includes('FROM energy_listings l') && sql.includes('FOR UPDATE')) {
+            return {
+              rows: [{
+                id: 5,
+                seller_id: 20,
+                energy_source_id: 9,
+                available_kwh: '10',
+                reserved_kwh: '0',
+                price_per_kwh: '200',
+                status: 'ACTIVE',
+                device_id: 'seller_source_meter',
+                source_lat: '7.44',
+                source_lon: '3.9',
+                service_radius_m: 500,
+              }],
+            };
+          }
+          if (sql.includes('FROM user_devices')) {
+            assert.deepEqual(params, [10, 'buyer_destination_meter']);
+            return { rows: [{ device_id: 'buyer_destination_meter' }] };
+          }
+          if (sql.includes('INSERT INTO marketplace_purchases')) {
+            return {
+              rows: [{
+                id: 81,
+                deviceId: params?.[4],
+                status: 'RESERVED',
+              }],
+            };
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/marketplace/listings/5/purchase`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: authorization() },
+          body: JSON.stringify(requestBody('buyer_destination_meter')),
+        });
+
+        assert.equal(response.status, 201);
+        const body = await response.json() as any;
+        assert.equal(body.purchase.deviceId, 'buyer_destination_meter');
+        assert.equal(
+          statements.some(({ sql, params }) =>
+            sql.includes('UPDATE energy_listings') && params?.[1] === 5
+          ),
+          true
+        );
+      } finally {
+        pool.connect = originalConnect;
+      }
+    });
+
+    it('rejects a meter that is not linked to the buyer account', async () => {
+      const originalConnect = pool.connect;
+      const statements: string[] = [];
+      (pool as any).connect = async () => ({
+        query: async (sql: string) => {
+          statements.push(sql);
+          if (sql.includes('FROM energy_listings l') && sql.includes('FOR UPDATE')) {
+            return {
+              rows: [{
+                id: 5,
+                seller_id: 20,
+                energy_source_id: 9,
+                available_kwh: '10',
+                reserved_kwh: '0',
+                price_per_kwh: '200',
+                status: 'ACTIVE',
+                device_id: 'seller_source_meter',
+                source_lat: '7.44',
+                source_lon: '3.9',
+                service_radius_m: 500,
+              }],
+            };
+          }
+          if (sql.includes('FROM user_devices')) {
+            return { rows: [] };
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/marketplace/listings/5/purchase`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: authorization() },
+          body: JSON.stringify(requestBody('unlinked_meter')),
+        });
+
+        assert.equal(response.status, 400);
+        const body = await response.json() as any;
+        assert.equal(body.error, 'The selected destination meter is not linked to your account.');
+        assert.equal(statements.some((sql) => sql.includes('UPDATE energy_listings')), false);
+      } finally {
+        pool.connect = originalConnect;
+      }
+    });
+  });
+
   // ==========================================
   // 3. PAYMENT INITIATION ENDPOINT
   // ==========================================

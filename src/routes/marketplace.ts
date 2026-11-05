@@ -358,12 +358,12 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
     }
 
     const listingId = parseInt(`${req.params.id}`, 10);
-    const { kwhRequested, buyerLatitude, buyerLongitude } = req.body;
+    const { kwhRequested, buyerLatitude, buyerLongitude, buyerDeviceId } = req.body;
 
-    if (!kwhRequested || buyerLatitude === undefined || buyerLongitude === undefined) {
+    if (!kwhRequested || buyerLatitude === undefined || buyerLongitude === undefined || typeof buyerDeviceId !== 'string' || !buyerDeviceId.trim()) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required parameters: kwhRequested, buyerLatitude, buyerLongitude',
+        error: 'Missing required parameters: kwhRequested, buyerLatitude, buyerLongitude, buyerDeviceId',
       });
     }
 
@@ -373,6 +373,7 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
       kwhRequested: parseFloat(kwhRequested),
       buyerLatitude: parseFloat(buyerLatitude),
       buyerLongitude: parseFloat(buyerLongitude),
+      buyerDeviceId: buyerDeviceId.trim(),
     });
 
     return res.status(201).json({

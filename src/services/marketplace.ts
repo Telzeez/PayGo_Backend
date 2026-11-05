@@ -274,8 +274,9 @@ export class MarketplaceService {
     kwhRequested: number;
     buyerLatitude: number;
     buyerLongitude: number;
+    buyerDeviceId: string;
   }): Promise<{ purchase: MarketplacePurchase; redirectUrl?: string }> {
-    const { buyerId, listingId, kwhRequested, buyerLatitude, buyerLongitude } = params;
+    const { buyerId, listingId, kwhRequested, buyerLatitude, buyerLongitude, buyerDeviceId } = params;
 
     if (kwhRequested <= 0) {
       throw new Error('Requested energy must be greater than 0 kWh');
@@ -308,12 +309,12 @@ export class MarketplaceService {
 
       const buyerMeterRes = await client.query<{ device_id: string }>(
         `SELECT device_id FROM user_devices
-         WHERE user_id = $1 AND is_selected = true
+         WHERE user_id = $1 AND device_id = $2
          FOR SHARE`,
-        [buyerId]
+        [buyerId, buyerDeviceId]
       );
       if (buyerMeterRes.rows.length === 0) {
-        throw new Error('Link and select your own meter before purchasing marketplace energy');
+        throw new Error('The selected destination meter is not linked to your account.');
       }
 
       if (listing.status !== 'ACTIVE') {
