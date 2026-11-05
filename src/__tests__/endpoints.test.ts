@@ -10,8 +10,12 @@ import axios from 'axios';
 let server: http.Server;
 let baseUrl: string;
 
-const createAuthToken = (email = 'buyer@example.com') => jwt.sign(
-  { userId: 10, email, role: 'BUYER', isBuyer: true, isSeller: false },
+const createAuthToken = (
+  email = 'buyer@example.com',
+  role = 'BUYER',
+  isBuyer = role === 'BUYER',
+) => jwt.sign(
+  { userId: 10, email, role, isBuyer, isSeller: false },
   process.env.JWT_SECRET || 'paygo_default_jwt_secret_key_2026'
 );
 
@@ -154,6 +158,43 @@ describe('PAYGO API Endpoint Test Suite', () => {
 
       const body = await res.json() as any;
       assert.deepEqual(body, { error: 'Unknown endpoint' });
+    });
+  });
+
+  describe('POST /api/admin/devices/:deviceId/assign', () => {
+    it('requires an authenticated owner account', async () => {
+      const anonymousResponse = await fetch(`${baseUrl}/api/admin/devices/DEVICE-001/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      assert.equal(anonymousResponse.status, 401);
+
+      const buyerResponse = await fetch(`${baseUrl}/api/admin/devices/DEVICE-001/assign`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${createAuthToken()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      assert.equal(buyerResponse.status, 403);
+    });
+
+    it('does not request assignment details or link meters while prototype assignment is disabled', async () => {
+      const response = await fetch(`${baseUrl}/api/admin/devices/DEVICE-001/assign`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${createAuthToken('owner@example.com', 'OWNER', false)}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), {
+        success: false,
+        error: 'Meter assignment is temporarily disabled for the prototype.',
+      });
     });
   });
 
