@@ -12,6 +12,11 @@ CREATE TABLE IF NOT EXISTS users (
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_buyer BOOLEAN DEFAULT true;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_seller BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS paystack_subaccount_code VARCHAR(100);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payout_bank_code VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payout_bank_name VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payout_account_name VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payout_account_last4 CHAR(4);
 
 -- Table for tracking devices and their balances
 CREATE TABLE IF NOT EXISTS devices (

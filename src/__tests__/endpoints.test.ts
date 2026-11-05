@@ -2,12 +2,18 @@ import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'http';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import app from '../app.js';
 import pool from '../db.js';
 import axios from 'axios';
 
 let server: http.Server;
 let baseUrl: string;
+
+const createAuthToken = (email = 'buyer@example.com') => jwt.sign(
+  { userId: 10, email, role: 'BUYER', isBuyer: true, isSeller: false },
+  process.env.JWT_SECRET || 'paygo_default_jwt_secret_key_2026'
+);
 
 describe('PAYGO API Endpoint Test Suite', () => {
   before((_context, done) => {
@@ -155,10 +161,12 @@ describe('PAYGO API Endpoint Test Suite', () => {
   // 3. PAYMENT INITIATION ENDPOINT
   // ==========================================
   describe('POST /api/payment/initiate', () => {
+    const authorization = () => `Bearer ${createAuthToken()}`;
+
     it('should return 400 Bad Request when mandatory fields are missing', async () => {
       const res = await fetch(`${baseUrl}/api/payment/initiate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: authorization() },
         body: JSON.stringify({ amount: 500, email: 'buyer@example.com' }), // missing deviceId
       });
 
@@ -171,7 +179,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
     it('should return 400 Bad Request when payment amount is less than 100', async () => {
       const res = await fetch(`${baseUrl}/api/payment/initiate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: authorization() },
         body: JSON.stringify({ amount: 50, email: 'buyer@example.com', deviceId: 'device_001' }),
       });
 
@@ -183,6 +191,11 @@ describe('PAYGO API Endpoint Test Suite', () => {
 
     it('should successfully initialize payment via Paystack and return paymentUrl', async () => {
       const originalPost = axios.post;
+      const originalQuery = pool.query;
+      (pool as any).query = async (queryText: string) => {
+        assert.match(queryText, /FROM user_devices/);
+        return { rows: [{ '?column?': 1 }] };
+      };
       (axios as any).post = async () => ({
         data: {
           status: true,
@@ -196,7 +209,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
       try {
         const res = await fetch(`${baseUrl}/api/payment/initiate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: authorization() },
           body: JSON.stringify({ amount: 1000, email: 'buyer@example.com', deviceId: 'device_001' }),
         });
 
@@ -209,6 +222,112 @@ describe('PAYGO API Endpoint Test Suite', () => {
         });
       } finally {
         axios.post = originalPost;
+        pool.query = originalQuery;
+      }
+    });
+
+    it('should attach the seller subaccount to marketplace payments only', async () => {
+      const originalPost = axios.post;
+      const originalQuery = pool.query;
+      let paystackPayload: Record<string, unknown> | undefined;
+      (pool as any).query = async (queryText: string) => {
+        if (queryText.includes('FROM user_devices')) {
+          return { rows: [{ '?column?': 1 }] };
+        }
+        if (queryText.includes('paystack_subaccount_code')) {
+          return { rows: [{ subaccountCode: 'ACCT_seller_123' }] };
+        }
+        throw new Error(`Unexpected query: ${queryText}`);
+      };
+      (axios as any).post = async (_url: string, data: Record<string, unknown>) => {
+        paystackPayload = data;
+        return {
+          data: {
+            status: true,
+            data: {
+              authorization_url: 'https://checkout.paystack.com/marketplace_token',
+              reference: 'marketplace_ref_123',
+            },
+          },
+        };
+      };
+
+      try {
+        const res = await fetch(`${baseUrl}/api/payment/initiate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: authorization() },
+          body: JSON.stringify({
+            amount: 1000,
+            email: 'buyer@example.com',
+            deviceId: 'buyer_meter_001',
+            marketplacePurchaseId: 25,
+          }),
+        });
+
+        assert.equal(res.status, 200);
+        assert.equal(paystackPayload?.subaccount, 'ACCT_seller_123');
+      } finally {
+        axios.post = originalPost;
+        pool.query = originalQuery;
+      }
+    });
+  });
+
+  describe('PUT /api/marketplace/payout-account', () => {
+    it('verifies bank details and creates a 90/10 seller/platform subaccount', async () => {
+      const originalGet = axios.get;
+      const originalPost = axios.post;
+      const originalQuery = pool.query;
+      const sellerToken = jwt.sign(
+        { userId: 10, email: 'seller@example.com', role: 'OWNER', isBuyer: false, isSeller: true },
+        process.env.JWT_SECRET || 'paygo_default_jwt_secret_key_2026'
+      );
+      const sellerAuthorization = `Bearer ${sellerToken}`;
+      let subaccountPayload: Record<string, unknown> | undefined;
+
+      (axios as any).get = async (url: string) => {
+        if (url.includes('/bank?')) {
+          return { data: { status: true, data: [{ name: 'Test Bank', code: '001', active: true }] } };
+        }
+        if (url.includes('/bank/resolve?')) {
+          return { data: { status: true, data: { account_name: 'Seller Name' } } };
+        }
+        throw new Error(`Unexpected Paystack URL: ${url}`);
+      };
+      (axios as any).post = async (_url: string, data: Record<string, unknown>) => {
+        subaccountPayload = data;
+        return { data: { status: true, data: { subaccount_code: 'ACCT_seller_123' } } };
+      };
+      (pool as any).query = async (queryText: string) => {
+        if (queryText.includes('SELECT paystack_subaccount_code')) {
+          return { rows: [{ subaccountCode: null }] };
+        }
+        if (queryText.includes('UPDATE users')) {
+          return { rows: [{ id: 10 }] };
+        }
+        throw new Error(`Unexpected query: ${queryText}`);
+      };
+
+      try {
+        const res = await fetch(`${baseUrl}/api/marketplace/payout-account`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: sellerAuthorization },
+          body: JSON.stringify({
+            businessName: 'Seller Business',
+            bankCode: '001',
+            accountNumber: '1234567890',
+          }),
+        });
+
+        assert.equal(res.status, 200);
+        assert.equal(subaccountPayload?.percentage_charge, 10);
+        const body = await res.json() as any;
+        assert.equal(body.account.sellerPayoutPercentage, 90);
+        assert.equal(body.account.accountNumberLast4, '7890');
+      } finally {
+        axios.get = originalGet;
+        axios.post = originalPost;
+        pool.query = originalQuery;
       }
     });
   });
@@ -326,7 +445,9 @@ describe('PAYGO API Endpoint Test Suite', () => {
   // ==========================================
   describe('GET /api/devices/:deviceId', () => {
     it('should return 400 Bad Request if deviceId is invalid or too short', async () => {
-      const res = await fetch(`${baseUrl}/api/devices/ab`); // length < 3
+      const res = await fetch(`${baseUrl}/api/devices/ab`, {
+        headers: { Authorization: `Bearer ${createAuthToken()}` },
+      }); // length < 3
       assert.equal(res.status, 400);
 
       const body = await res.json() as any;
@@ -336,6 +457,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
 
     it('should return device balance and recent transactions for valid deviceId', async () => {
       const originalConnect = pool.connect;
+      const originalQuery = pool.query;
       const mockBalance = '25.50';
       const mockLastUpdated = new Date().toISOString();
       const mockTxRows = [
@@ -356,9 +478,15 @@ describe('PAYGO API Endpoint Test Suite', () => {
         },
         release: () => {},
       });
+      (pool as any).query = async (queryText: string) => {
+        assert.match(queryText, /FROM user_devices/);
+        return { rows: [{ '?column?': 1 }] };
+      };
 
       try {
-        const res = await fetch(`${baseUrl}/api/devices/device_001`);
+        const res = await fetch(`${baseUrl}/api/devices/device_001`, {
+          headers: { Authorization: `Bearer ${createAuthToken()}` },
+        });
         assert.equal(res.status, 200);
 
         const body = await res.json() as any;
@@ -369,6 +497,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
         assert.ok(Array.isArray(body.transactions));
       } finally {
         pool.connect = originalConnect;
+        pool.query = originalQuery;
       }
     });
   });
@@ -379,10 +508,14 @@ describe('PAYGO API Endpoint Test Suite', () => {
   describe('GET /api/transactions/verify/:reference', () => {
     it('should return status pending if transaction reference is not yet processed', async () => {
       const originalQuery = pool.query;
+      const originalGet = axios.get;
       (pool as any).query = async () => ({ rows: [] });
+      (axios as any).get = async () => ({ data: { status: true, data: { status: 'pending' } } });
 
       try {
-        const res = await fetch(`${baseUrl}/api/transactions/verify/unprocessed_ref`);
+        const res = await fetch(`${baseUrl}/api/transactions/verify/unprocessed_ref`, {
+          headers: { Authorization: `Bearer ${createAuthToken()}` },
+        });
         assert.equal(res.status, 200);
 
         const body = await res.json() as any;
@@ -392,6 +525,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
         });
       } finally {
         pool.query = originalQuery;
+        axios.get = originalGet;
       }
     });
 
@@ -400,6 +534,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
       const mockTransaction = {
         kwh_amount: '10.00',
         hardware_status: 'CONFIRMED',
+        device_id: 'device_001',
       };
 
       (pool as any).query = async (queryText: string) => {
@@ -408,7 +543,9 @@ describe('PAYGO API Endpoint Test Suite', () => {
       };
 
       try {
-        const res = await fetch(`${baseUrl}/api/transactions/verify/ref_processed_123`);
+        const res = await fetch(`${baseUrl}/api/transactions/verify/ref_processed_123`, {
+          headers: { Authorization: `Bearer ${createAuthToken()}` },
+        });
         assert.equal(res.status, 200);
 
         const body = await res.json() as any;
@@ -417,6 +554,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
           data: {
             kwhAmount: 10,
             hardwareStatus: 'CONFIRMED',
+            deviceId: 'device_001',
           },
         });
         assert.equal('fallbackToken' in body.data, false);

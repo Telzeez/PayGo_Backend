@@ -42,16 +42,23 @@ router.post('/initiate', authenticateToken, async (req:AuthenticatedRequest, res
             return res.status(403).json({ success: false, error: 'Payment target must be a meter linked to your account.' });
         }
 
+        let sellerSubaccountCode: string | undefined;
         if (marketplacePurchaseId !== undefined) {
-            const purchase = await pool.query(
-                `SELECT 1 FROM marketplace_purchases
-                 WHERE id = $1 AND buyer_id = $2 AND device_id = $3
-                   AND amount = $4 AND status = 'RESERVED'`,
+            const purchase = await pool.query<{ subaccountCode: string | null }>(
+                `SELECT u.paystack_subaccount_code AS "subaccountCode"
+                 FROM marketplace_purchases p
+                 JOIN users u ON u.id = p.seller_id
+                 WHERE p.id = $1 AND p.buyer_id = $2 AND p.device_id = $3
+                   AND p.amount = $4 AND p.status = 'RESERVED'`,
                 [marketplacePurchaseId, req.user.userId, deviceId, amount]
             );
             if (purchase.rows.length === 0) {
                 return res.status(403).json({ success: false, error: 'Marketplace purchase does not match your account, meter, or payment amount.' });
             }
+            if (!purchase.rows[0].subaccountCode) {
+                return res.status(409).json({ success: false, error: 'The seller has not configured a Paystack payout account yet.' });
+            }
+            sellerSubaccountCode = purchase.rows[0].subaccountCode;
         }
 
         // Determine frontend URL (env var, or dynamic request origin from browser, or localhost fallback)
@@ -63,6 +70,7 @@ router.post('/initiate', authenticateToken, async (req:AuthenticatedRequest, res
                 email: req.user.email,
                 amount: amount* 100,
                 metadata: { deviceId, ...(marketplacePurchaseId ? { marketplacePurchaseId } : {}) },
+                ...(sellerSubaccountCode ? { subaccount: sellerSubaccountCode } : {}),
                 callback_url: `${FRONTEND_URL}/verify`
             },
             {
