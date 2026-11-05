@@ -22,11 +22,13 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS payout_account_last4 CHAR(4);
 CREATE TABLE IF NOT EXISTS devices (
   id SERIAL PRIMARY KEY,
   device_id VARCHAR(50) UNIQUE NOT NULL,
+  is_demo BOOLEAN NOT NULL DEFAULT false,
   current_balance DECIMAL(12,4) DEFAULT 0,
   status VARCHAR(20) DEFAULT 'OFFLINE',
   last_seen_at TIMESTAMP,
   last_updated TIMESTAMP DEFAULT NOW()
 );
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'OFFLINE';
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP;
 ALTER TABLE devices ALTER COLUMN current_balance TYPE DECIMAL(12,4);
@@ -149,6 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_marketplace_purchases_seller ON marketplace_purch
 INSERT INTO devices (device_id, current_balance, status, last_seen_at)
 VALUES ('DEVICE-001', 30.00, 'OFFLINE', NULL)
 ON CONFLICT (device_id) DO NOTHING;
+UPDATE devices SET is_demo = true WHERE device_id = 'DEVICE-001';
 
 INSERT INTO users (email, phone, password_hash, role)
 VALUES ('seller_demo@paygo.com', '+2349016971707', '$2b$10$e7K4y5Q8z1K3v7X8M9L0Oe.9.1.1.1.1.1.1.1.1', 'OWNER')

@@ -126,7 +126,7 @@ backend/
     │   ├── middleware.ts # Request logger, 404 handler, global error handler
     │   └── authMiddleware.ts # JWT authentication & role guard middleware
     ├── routes/
-    │   ├── auth.ts       # /api/auth/register, /login, /me, /logout endpoints
+    │   ├── auth.ts       # /api/auth/register, /login, /become-seller, /me, /logout endpoints
     │   ├── payment.ts    # /api/payment/initiate endpoint
     │   ├── webhook.ts    # /api/webhook/paystack HMAC-verified remote recharge handler
     │   ├── devices.ts    # /api/devices/:deviceId profile, status & transactions endpoint
@@ -233,6 +233,17 @@ MQTT_PASS=YourMqttPassword
 psql -U postgres -d paygo_db -f src/init-db.sql
 ```
 
+For an existing database, apply the additive migration before deploying marketplace changes:
+
+```bash
+psql -U postgres -d paygo_db -f migrations/20261105_mark_device_001_demo.sql
+```
+
+This marks the shared `DEVICE-001` prototype meter as demo-only without deleting its
+source, listings, purchases, or history. Marketplace discovery and purchases exclude
+demo meters. A rollback is available at
+[`migrations/rollback/20261105_mark_device_001_demo.sql`](migrations/rollback/20261105_mark_device_001_demo.sql).
+
 ### Installation
 
 ```bash
@@ -277,9 +288,9 @@ Payment verification returns the transaction's current `hardwareStatus`; it does
 
 ### Marketplace Seller Payouts
 
-Authenticated seller and owner accounts can configure a Paystack subaccount for marketplace settlements:
+Authenticated seller-capable accounts can configure a Paystack subaccount for marketplace settlements. Existing buyers can enable seller capability on the same account with `POST /api/auth/become-seller`; this does not change their account role or assign a meter.
 
-- `GET /api/marketplace/payout-account/banks` — list active Nigerian payout banks.
+- `GET /api/marketplace/payout-account/banks` — list active Nigerian payout banks (seller capability required).
 - `GET /api/marketplace/payout-account` — return the saved, masked payout-account details.
 - `PUT /api/marketplace/payout-account` — verify a 10-digit bank account with Paystack and create or update the seller subaccount. The request body contains `businessName`, `bankCode`, and `accountNumber`.
 

@@ -14,8 +14,9 @@ const createAuthToken = (
   email = 'buyer@example.com',
   role = 'BUYER',
   isBuyer = role === 'BUYER',
+  isSeller = role === 'SELLER',
 ) => jwt.sign(
-  { userId: 10, email, role, isBuyer, isSeller: false },
+  { userId: 10, email, role, isBuyer, isSeller },
   process.env.JWT_SECRET || 'paygo_default_jwt_secret_key_2026'
 );
 
@@ -56,6 +57,42 @@ describe('PAYGO API Endpoint Test Suite', () => {
   // AUTH ENDPOINTS (REGISTER, LOGIN, ME)
   // ==========================================
   describe('AUTH ENDPOINTS', () => {
+    it('POST /api/auth/become-seller enables seller capability without changing account identity', async () => {
+      const originalQuery = pool.query;
+      (pool as any).query = async (queryText: string, params?: unknown[]) => {
+        assert.match(queryText, /UPDATE users/);
+        assert.deepEqual(params, [10]);
+        return {
+          rows: [{
+            id: 10,
+            email: 'buyer@example.com',
+            phone: null,
+            role: 'USER',
+            is_buyer: true,
+            is_seller: true,
+          }],
+        };
+      };
+
+      try {
+        const response = await fetch(`${baseUrl}/api/auth/become-seller`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${createAuthToken('buyer@example.com', 'USER', true)}` },
+        });
+        assert.equal(response.status, 200);
+        const body = await response.json() as any;
+        assert.equal(body.user.role, 'USER');
+        assert.equal(body.user.isBuyer, true);
+        assert.equal(body.user.isSeller, true);
+        const token = jwt.verify(body.token, process.env.JWT_SECRET || 'paygo_default_jwt_secret_key_2026') as jwt.JwtPayload;
+        assert.equal(token.role, 'USER');
+        assert.equal(token.isBuyer, true);
+        assert.equal(token.isSeller, true);
+      } finally {
+        pool.query = originalQuery;
+      }
+    });
+
     it('POST /api/auth/register - should validate missing fields', async () => {
       const res = await fetch(`${baseUrl}/api/auth/register`, {
         method: 'POST',
@@ -198,14 +235,106 @@ describe('PAYGO API Endpoint Test Suite', () => {
     });
   });
 
+  describe('GET /api/marketplace/sources/me', () => {
+    it('requires seller capability rather than buyer or owner role alone', async () => {
+      const buyerResponse = await fetch(`${baseUrl}/api/marketplace/sources/me`, {
+        headers: { Authorization: `Bearer ${createAuthToken('buyer@example.com', 'USER', true)}` },
+      });
+      assert.equal(buyerResponse.status, 403);
+
+      const ownerResponse = await fetch(`${baseUrl}/api/marketplace/sources/me`, {
+        headers: { Authorization: `Bearer ${createAuthToken('owner@example.com', 'OWNER', false)}` },
+      });
+      assert.equal(ownerResponse.status, 403);
+
+      const originalQuery = pool.query;
+      (pool as any).query = async (queryText: string) => {
+        assert.match(queryText, /FROM energy_sources s/);
+        return { rows: [] };
+      };
+
+      try {
+        const sellerResponse = await fetch(`${baseUrl}/api/marketplace/sources/me`, {
+          headers: {
+            Authorization: `Bearer ${createAuthToken('seller@example.com', 'USER', true, true)}`,
+          },
+        });
+        assert.equal(sellerResponse.status, 200);
+      } finally {
+        pool.query = originalQuery;
+      }
+    });
+  });
+
   describe('POST /api/marketplace/listings/:id/purchase', () => {
     const authorization = () => 'Bearer ' + createAuthToken();
-    const requestBody = (buyerDeviceId: string) => ({
+    const requestBody = (buyerDeviceId: string, buyerLatitude = 7.44, buyerLongitude = 3.9) => ({
       kwhRequested: 2,
-      buyerLatitude: 7.44,
-      buyerLongitude: 3.9,
+      buyerLatitude,
+      buyerLongitude,
       buyerDeviceId,
     });
+
+    const mockPurchase = async (
+      listingOverrides: Record<string, unknown> = {},
+      buyerLatitude = 7.44,
+      buyerLongitude = 3.9,
+      sellerMeterLinked = true,
+    ) => {
+      const originalConnect = pool.connect;
+      const statements: Array<{ sql: string; params?: unknown[] }> = [];
+      (pool as any).connect = async () => ({
+        query: async (sql: string, params?: unknown[]) => {
+          statements.push({ sql, params });
+          if (sql.includes('FROM energy_listings l') && sql.includes('FOR UPDATE')) {
+            return {
+              rows: [{
+                id: 5,
+                seller_id: 20,
+                energy_source_id: 9,
+                available_kwh: '10',
+                reserved_kwh: '0',
+                price_per_kwh: '200',
+                status: 'ACTIVE',
+                expires_at: new Date(Date.now() + 60_000).toISOString(),
+                source_owner_id: 20,
+                source_status: 'ACTIVE',
+                is_demo: false,
+                seller_is_seller: true,
+                seller_role: 'USER',
+                device_id: 'seller_source_meter',
+                source_lat: '7.44',
+                source_lon: '3.9',
+                service_radius_m: 500,
+                ...listingOverrides,
+              }],
+            };
+          }
+          if (sql.includes('FROM user_devices')) {
+            if (params?.[0] === 10) {
+              return { rows: [{ device_id: 'buyer_destination_meter' }] };
+            }
+            return { rows: sellerMeterLinked ? [{ device_id: 'seller_source_meter' }] : [] };
+          }
+          if (sql.includes('INSERT INTO marketplace_purchases')) {
+            return { rows: [{ id: 81, deviceId: params?.[4], status: 'RESERVED' }] };
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      });
+
+      try {
+        const response = await fetch(`${baseUrl}/api/marketplace/listings/5/purchase`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: authorization() },
+          body: JSON.stringify(requestBody('buyer_destination_meter', buyerLatitude, buyerLongitude)),
+        });
+        return { response, statements };
+      } finally {
+        pool.connect = originalConnect;
+      }
+    };
 
     it('captures the explicitly selected buyer meter, not the seller source meter', async () => {
       const originalConnect = pool.connect;
@@ -223,6 +352,12 @@ describe('PAYGO API Endpoint Test Suite', () => {
                 reserved_kwh: '0',
                 price_per_kwh: '200',
                 status: 'ACTIVE',
+                expires_at: new Date(Date.now() + 60_000).toISOString(),
+                source_owner_id: 20,
+                source_status: 'ACTIVE',
+                is_demo: false,
+                seller_is_seller: true,
+                seller_role: 'USER',
                 device_id: 'seller_source_meter',
                 source_lat: '7.44',
                 source_lon: '3.9',
@@ -231,8 +366,11 @@ describe('PAYGO API Endpoint Test Suite', () => {
             };
           }
           if (sql.includes('FROM user_devices')) {
-            assert.deepEqual(params, [10, 'buyer_destination_meter']);
-            return { rows: [{ device_id: 'buyer_destination_meter' }] };
+            if (params?.[0] === 10) {
+              assert.deepEqual(params, [10, 'buyer_destination_meter']);
+              return { rows: [{ device_id: 'buyer_destination_meter' }] };
+            }
+            return { rows: [{ device_id: 'seller_source_meter' }] };
           }
           if (sql.includes('INSERT INTO marketplace_purchases')) {
             return {
@@ -314,6 +452,64 @@ describe('PAYGO API Endpoint Test Suite', () => {
       } finally {
         pool.connect = originalConnect;
       }
+    });
+
+    it('rejects purchase when buyer is outside the seller service radius', async () => {
+      const { response, statements } = await mockPurchase({}, 8, 3.9);
+      assert.equal(response.status, 400);
+      const body = await response.json() as any;
+      assert.match(body.error, /outside allowed service radius/);
+      assert.equal(statements.some(({ sql }) => sql.includes('UPDATE energy_listings')), false);
+    });
+
+    it('rejects paused, expired and demo-only listings without reserving energy', async () => {
+      const cases = [
+        {
+          name: 'paused listing',
+          listing: { status: 'PAUSED' },
+          error: /no longer active/,
+        },
+        {
+          name: 'expired listing',
+          listing: { expires_at: new Date(Date.now() - 60_000).toISOString() },
+          error: /has expired/,
+        },
+        {
+          name: 'demo-only listing',
+          listing: { is_demo: true },
+          error: /not available for marketplace purchases/,
+        },
+        {
+          name: 'source owned by another account',
+          listing: { source_owner_id: 21 },
+          error: /does not own its source/,
+        },
+        {
+          name: 'seller capability disabled',
+          listing: { seller_is_seller: false, seller_role: 'USER' },
+          error: /Seller capability is no longer enabled/,
+        },
+      ];
+
+      for (const testCase of cases) {
+        const { response, statements } = await mockPurchase(testCase.listing);
+        assert.equal(response.status, 400, testCase.name);
+        const body = await response.json() as any;
+        assert.match(body.error, testCase.error, testCase.name);
+        assert.equal(
+          statements.some(({ sql }) => sql.includes('UPDATE energy_listings')),
+          false,
+          testCase.name
+        );
+      }
+    });
+
+    it('rejects a seller whose source meter is no longer linked to their account', async () => {
+      const { response, statements } = await mockPurchase({}, 7.44, 3.9, false);
+      assert.equal(response.status, 400);
+      const body = await response.json() as any;
+      assert.equal(body.error, 'Seller no longer owns the meter for this energy source.');
+      assert.equal(statements.some(({ sql }) => sql.includes('UPDATE energy_listings')), false);
     });
   });
 

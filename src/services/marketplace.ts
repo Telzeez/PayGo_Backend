@@ -36,11 +36,14 @@ export class MarketplaceService {
     }
 
     const deviceCheck = await pool.query(
-      'SELECT 1 FROM user_devices WHERE user_id = $1 AND device_id = $2',
+      `SELECT 1
+       FROM user_devices ud
+       JOIN devices d ON d.device_id = ud.device_id
+       WHERE ud.user_id = $1 AND ud.device_id = $2 AND d.is_demo = false`,
       [ownerId, deviceId]
     );
     if (deviceCheck.rows.length === 0) {
-      throw new Error('The energy source meter must be linked to your account first');
+      throw new Error('Use a non-demo meter linked to your account as the energy source.');
     }
 
     const result = await pool.query(
@@ -48,7 +51,8 @@ export class MarketplaceService {
        (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
        RETURNING id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
-                 service_radius_m AS "serviceRadiusMeters", status, created_at AS "createdAt", updated_at AS "updatedAt"`,
+                 service_radius_m AS "serviceRadiusMeters", status, false AS "isDemo",
+                 created_at AS "createdAt", updated_at AS "updatedAt"`,
       [ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters]
     );
 
@@ -60,11 +64,14 @@ export class MarketplaceService {
    */
   static async getSellerSources(ownerId: number): Promise<EnergySource[]> {
     const result = await pool.query(
-      `SELECT id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
-              service_radius_m AS "serviceRadiusMeters", status, created_at AS "createdAt", updated_at AS "updatedAt"
-       FROM energy_sources
-       WHERE owner_id = $1 AND status != 'DECOMMISSIONED'
-       ORDER BY created_at DESC`,
+      `SELECT s.id, s.owner_id AS "ownerId", s.device_id AS "deviceId", s.name,
+              s.latitude, s.longitude, s.service_radius_m AS "serviceRadiusMeters",
+              s.status, d.is_demo AS "isDemo",
+              s.created_at AS "createdAt", s.updated_at AS "updatedAt"
+       FROM energy_sources s
+       JOIN devices d ON d.device_id = s.device_id
+       WHERE s.owner_id = $1 AND s.status != 'DECOMMISSIONED'
+       ORDER BY s.created_at DESC`,
       [ownerId]
     );
     return result.rows;
@@ -92,7 +99,11 @@ export class MarketplaceService {
 
     // Verify source ownership
     const sourceCheck = await pool.query(
-      'SELECT id FROM energy_sources WHERE id = $1 AND owner_id = $2 AND status = \'ACTIVE\'',
+      `SELECT s.id
+       FROM energy_sources s
+       JOIN devices d ON d.device_id = s.device_id
+       JOIN user_devices ud ON ud.user_id = s.owner_id AND ud.device_id = s.device_id
+       WHERE s.id = $1 AND s.owner_id = $2 AND s.status = 'ACTIVE' AND d.is_demo = false`,
       [energySourceId, sellerId]
     );
 
@@ -109,6 +120,7 @@ export class MarketplaceService {
        RETURNING id, energy_source_id AS "energySourceId", seller_id AS "sellerId",
                  available_kwh AS "availableKwh", reserved_kwh AS "reservedKwh",
                  price_per_kwh AS "pricePerKwh", status, expires_at AS "expiresAt",
+                 false AS "isDemo",
                  created_at AS "createdAt", updated_at AS "updatedAt"`,
       [energySourceId, sellerId, availableKwh, pricePerKwh, expiresAt]
     );
@@ -121,13 +133,16 @@ export class MarketplaceService {
    */
   static async getSellerListings(sellerId: number): Promise<EnergyListing[]> {
     const result = await pool.query(
-      `SELECT id, energy_source_id AS "energySourceId", seller_id AS "sellerId",
-              available_kwh AS "availableKwh", reserved_kwh AS "reservedKwh",
-              price_per_kwh AS "pricePerKwh", status, expires_at AS "expiresAt",
-              created_at AS "createdAt", updated_at AS "updatedAt"
-       FROM energy_listings
-       WHERE seller_id = $1
-       ORDER BY created_at DESC`,
+      `SELECT l.id, l.energy_source_id AS "energySourceId", l.seller_id AS "sellerId",
+              l.available_kwh AS "availableKwh", l.reserved_kwh AS "reservedKwh",
+              l.price_per_kwh AS "pricePerKwh", l.status, l.expires_at AS "expiresAt",
+              s.name AS "sourceName", d.is_demo AS "isDemo",
+              l.created_at AS "createdAt", l.updated_at AS "updatedAt"
+       FROM energy_listings l
+       JOIN energy_sources s ON s.id = l.energy_source_id
+       JOIN devices d ON d.device_id = s.device_id
+       WHERE l.seller_id = $1
+       ORDER BY l.created_at DESC`,
       [sellerId]
     );
     return result.rows;
@@ -145,6 +160,17 @@ export class MarketplaceService {
       `UPDATE energy_listings
        SET status = $1, updated_at = NOW()
        WHERE id = $2 AND seller_id = $3
+         AND (
+           $1 = 'PAUSED'
+           OR EXISTS (
+             SELECT 1
+             FROM energy_sources s
+             JOIN devices d ON d.device_id = s.device_id
+             JOIN user_devices ud ON ud.user_id = s.owner_id AND ud.device_id = s.device_id
+             WHERE s.id = energy_listings.energy_source_id
+               AND s.owner_id = $3 AND s.status = 'ACTIVE' AND d.is_demo = false
+           )
+         )
        RETURNING id, energy_source_id AS "energySourceId", seller_id AS "sellerId",
                  available_kwh AS "availableKwh", reserved_kwh AS "reservedKwh",
                  price_per_kwh AS "pricePerKwh", status, expires_at AS "expiresAt",
@@ -194,9 +220,14 @@ export class MarketplaceService {
       FROM energy_listings l
       JOIN energy_sources s ON l.energy_source_id = s.id
       JOIN users u ON s.owner_id = u.id
-      LEFT JOIN devices d ON s.device_id = d.device_id
+      JOIN devices d ON s.device_id = d.device_id
+      JOIN user_devices ud ON ud.user_id = s.owner_id AND ud.device_id = s.device_id
       WHERE l.status = 'ACTIVE'
         AND s.status = 'ACTIVE'
+        AND d.is_demo = false
+        AND l.seller_id = s.owner_id
+        AND (u.is_seller = true OR u.role = 'SELLER')
+        AND l.available_kwh > l.reserved_kwh
         AND (l.expires_at IS NULL OR l.expires_at > NOW())
     `;
 
@@ -293,11 +324,16 @@ export class MarketplaceService {
 
       // Lock listing row for update to prevent concurrent overselling
       const listingRes = await client.query(
-        `SELECT l.id, l.seller_id, l.energy_source_id, l.available_kwh, l.reserved_kwh, l.price_per_kwh, l.status,
-                s.device_id, s.latitude AS source_lat, s.longitude AS source_lon, s.service_radius_m
+        `SELECT l.id, l.seller_id, l.energy_source_id, l.available_kwh, l.reserved_kwh,
+                l.price_per_kwh, l.status, l.expires_at,
+                s.owner_id AS source_owner_id, s.status AS source_status, s.device_id,
+                s.latitude AS source_lat, s.longitude AS source_lon, s.service_radius_m,
+                d.is_demo, seller.is_seller AS seller_is_seller, seller.role AS seller_role
          FROM energy_listings l
          JOIN energy_sources s ON l.energy_source_id = s.id
-         WHERE l.id = $1 FOR UPDATE`,
+         JOIN devices d ON d.device_id = s.device_id
+         JOIN users seller ON seller.id = l.seller_id
+         WHERE l.id = $1 FOR UPDATE OF l, s`,
         [listingId]
       );
 
@@ -308,8 +344,9 @@ export class MarketplaceService {
       const listing = listingRes.rows[0];
 
       const buyerMeterRes = await client.query<{ device_id: string }>(
-        `SELECT device_id FROM user_devices
-         WHERE user_id = $1 AND device_id = $2
+        `SELECT ud.device_id FROM user_devices ud
+         JOIN devices d ON d.device_id = ud.device_id
+         WHERE ud.user_id = $1 AND ud.device_id = $2 AND d.is_demo = false
          FOR SHARE`,
         [buyerId, buyerDeviceId]
       );
@@ -321,7 +358,23 @@ export class MarketplaceService {
         throw new Error('Listing is no longer active for purchase');
       }
 
-      if (listing.seller_id === buyerId) {
+      if (listing.source_status !== 'ACTIVE' || listing.is_demo) {
+        throw new Error('This energy source is not available for marketplace purchases.');
+      }
+
+      if (listing.expires_at && new Date(listing.expires_at).getTime() <= Date.now()) {
+        throw new Error('This energy listing has expired.');
+      }
+
+      if (Number(listing.seller_id) !== Number(listing.source_owner_id)) {
+        throw new Error('Energy listing seller does not own its source.');
+      }
+
+      if (!listing.seller_is_seller && listing.seller_role !== 'SELLER') {
+        throw new Error('Seller capability is no longer enabled for this account.');
+      }
+
+      if (Number(listing.seller_id) === buyerId) {
         throw new Error('Sellers cannot purchase from their own energy listing');
       }
 
@@ -331,6 +384,16 @@ export class MarketplaceService {
 
       if (remainingSellable < kwhRequested) {
         throw new Error(`Only ${remainingSellable.toFixed(2)} kWh remains available for purchase`);
+      }
+
+      const sellerMeterRes = await client.query(
+        `SELECT 1 FROM user_devices
+         WHERE user_id = $1 AND device_id = $2
+         FOR SHARE`,
+        [listing.seller_id, listing.device_id]
+      );
+      if (sellerMeterRes.rows.length === 0) {
+        throw new Error('Seller no longer owns the meter for this energy source.');
       }
 
       // Server-side distance recalculation at purchase time

@@ -14,7 +14,7 @@ const getPaystackHeaders = (secret: string) => ({
   'Content-Type': 'application/json',
 });
 
-router.get('/payout-account/banks', authenticateToken, requireRole(['SELLER', 'OWNER']), async (_req, res) => {
+router.get('/payout-account/banks', authenticateToken, requireRole(['SELLER']), async (_req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   if (!secret) {
     return res.status(503).json({ success: false, error: 'Payout account setup is temporarily unavailable.' });
@@ -41,7 +41,7 @@ router.get('/payout-account/banks', authenticateToken, requireRole(['SELLER', 'O
   }
 });
 
-router.get('/payout-account', authenticateToken, requireRole(['SELLER', 'OWNER']), async (req: AuthenticatedRequest, res: Response) => {
+router.get('/payout-account', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Authentication required.' });
   }
@@ -74,7 +74,7 @@ router.get('/payout-account', authenticateToken, requireRole(['SELLER', 'OWNER']
   }
 });
 
-router.put('/payout-account', authenticateToken, requireRole(['SELLER', 'OWNER']), async (req: AuthenticatedRequest, res: Response) => {
+router.put('/payout-account', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'Authentication required.' });
   }
@@ -175,7 +175,7 @@ router.put('/payout-account', authenticateToken, requireRole(['SELLER', 'OWNER']
 // ==========================================
 // 1. REGISTER ENERGY SOURCE (SELLER)
 // ==========================================
-router.post('/sources', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -213,7 +213,7 @@ router.post('/sources', authenticateToken, async (req: AuthenticatedRequest, res
 // ==========================================
 // 2. GET SELLER'S ENERGY SOURCES
 // ==========================================
-router.get('/sources/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/sources/me', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -230,7 +230,7 @@ router.get('/sources/me', authenticateToken, async (req: AuthenticatedRequest, r
 // ==========================================
 // 3. CREATE ENERGY LISTING (SELLER)
 // ==========================================
-router.post('/listings', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/listings', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -267,7 +267,7 @@ router.post('/listings', authenticateToken, async (req: AuthenticatedRequest, re
 // ==========================================
 // 4. GET SELLER'S LISTINGS
 // ==========================================
-router.get('/my-listings', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/my-listings', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -284,7 +284,7 @@ router.get('/my-listings', authenticateToken, async (req: AuthenticatedRequest, 
 // ==========================================
 // 5. PAUSE / ACTIVATE LISTING
 // ==========================================
-router.post('/listings/:id/pause', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/listings/:id/pause', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -298,7 +298,7 @@ router.post('/listings/:id/pause', authenticateToken, async (req: AuthenticatedR
   }
 });
 
-router.post('/listings/:id/activate', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/listings/:id/activate', authenticateToken, requireRole(['SELLER']), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });

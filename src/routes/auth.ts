@@ -354,6 +354,54 @@ router.post('/register-google', async (req: Request, res: Response) => {
 });
 
 // ==========================================
+// 2.7 ENABLE SELLER CAPABILITY ON THE EXISTING ACCOUNT
+// ==========================================
+router.post('/become-seller', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, error: 'Authentication required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE users
+       SET is_seller = true, is_buyer = true, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, email, phone, role, is_buyer, is_seller`,
+      [req.user.userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Account not found.' });
+    }
+
+    const user = result.rows[0];
+    const tokenPayload: JwtPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      isBuyer: user.is_buyer,
+      isSeller: user.is_seller,
+    };
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
+
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        isBuyer: user.is_buyer,
+        isSeller: user.is_seller,
+      },
+    });
+  } catch (error) {
+    console.error('Enable seller capability failed:', error);
+    return res.status(500).json({ success: false, error: 'Unable to enable seller features.' });
+  }
+});
+
+// ==========================================
 // 3. GET CURRENT LOGGED IN USER (/me)
 // ==========================================
 router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {

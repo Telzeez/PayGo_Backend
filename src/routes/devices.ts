@@ -43,7 +43,7 @@ router.get('/mine', authenticateToken, async (req: AuthenticatedRequest, res: Re
               ud.is_selected AS "isSelected"
        FROM user_devices ud
        JOIN devices d ON d.device_id = ud.device_id
-       WHERE ud.user_id = $1
+       WHERE ud.user_id = $1 AND d.is_demo = false
        ORDER BY ud.is_selected DESC, ud.linked_at ASC`,
       [req.user.userId]
     );
@@ -77,7 +77,11 @@ router.put('/mine/selected', authenticateToken, async (req: AuthenticatedRequest
   try {
     await client.query('BEGIN');
     const links = await client.query<{ device_id: string }>(
-      'SELECT device_id FROM user_devices WHERE user_id = $1 FOR UPDATE',
+      `SELECT ud.device_id
+       FROM user_devices ud
+       JOIN devices d ON d.device_id = ud.device_id
+       WHERE ud.user_id = $1 AND d.is_demo = false
+       FOR UPDATE OF ud`,
       [req.user.userId]
     );
 
