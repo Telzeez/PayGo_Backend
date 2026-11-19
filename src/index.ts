@@ -3,13 +3,11 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import pool from './db.js';
-import './mqtt-client.js';  // Auto-connects when imported
+import './mqtt-client.js';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-import { fileURLToPath } from 'url';
-
-// Auto-initialize DB schema on startup
 const initDb = async () => {
   try {
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,12 +18,15 @@ const initDb = async () => {
       path.join(__dirname, '..', 'src', 'init-db.sql'),
       path.join(process.cwd(), 'init-db.sql'),
     ];
-
     const sqlPath = candidates.find((p) => fs.existsSync(p));
     if (sqlPath) {
-      const sql = fs.readFileSync(sqlPath, 'utf8');
-      await pool.query(sql);
+      await pool.query(fs.readFileSync(sqlPath, 'utf8'));
       console.log(`Database tables initialized successfully from ${sqlPath}`);
+      const migrationPath = path.join(path.dirname(sqlPath), 'migrations', '20261119_multi_device_metering.sql');
+      if (fs.existsSync(migrationPath)) {
+        await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+        console.log('PAYGO multi-device metering migration applied.');
+      }
     } else {
       console.warn('Warning: init-db.sql was not found in candidate locations.');
     }
@@ -34,11 +35,6 @@ const initDb = async () => {
   }
 };
 
-initDb();
-
+await initDb();
 const PORT: number = parseInt(process.env.PORT || '3001', 10);
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

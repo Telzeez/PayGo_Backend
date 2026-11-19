@@ -35,14 +35,28 @@ export class MarketplaceService {
       throw new Error(`Service radius must be between 1 and ${DEFAULT_PLATFORM_MAX_RADIUS_METERS} meters`);
     }
 
-    // Verify device exists
-    const deviceCheck = await pool.query('SELECT id FROM devices WHERE device_id = $1', [deviceId]);
-    if (deviceCheck.rows.length === 0) {
-      // Auto-register device if missing for seamless setup
-      await pool.query('INSERT INTO devices (device_id, current_balance, status) VALUES ($1, 0, $2)', [
-        deviceId,
-        'ONLINE',
-      ]);
+    // A physical meter can belong to only one owner. Existing unassigned
+    // devices may be associated with this owner; already-owned devices cannot
+    // be silently claimed by another account.
+    const otherOwnerSource = await pool.query(
+      'SELECT 1 FROM energy_sources WHERE device_id = $1 AND owner_id <> $2 LIMIT 1',
+      [deviceId, ownerId]
+    );
+    if (otherOwnerSource.rows.length) {
+      throw new Error('This meter is already associated with another owner');
+    }
+
+    const deviceCheck = await pool.query(
+      `INSERT INTO devices (device_id, owner_id, current_balance, status)
+       VALUES ($1, $2, 0, 'OFFLINE')
+       ON CONFLICT (device_id)
+       DO UPDATE SET owner_id = COALESCE(devices.owner_id, EXCLUDED.owner_id)
+       WHERE devices.owner_id IS NULL OR devices.owner_id = EXCLUDED.owner_id
+       RETURNING id`,
+      [deviceId, ownerId]
+    );
+    if (!deviceCheck.rows.length) {
+      throw new Error('This meter is already assigned to another owner');
     }
 
     const result = await pool.query(
@@ -273,12 +287,13 @@ export class MarketplaceService {
    */
   static async createPurchaseIntent(params: {
     buyerId: number;
+    buyerDeviceId: string;
     listingId: number;
     kwhRequested: number;
     buyerLatitude: number;
     buyerLongitude: number;
   }): Promise<{ purchase: MarketplacePurchase; redirectUrl?: string }> {
-    const { buyerId, listingId, kwhRequested, buyerLatitude, buyerLongitude } = params;
+    const { buyerId, buyerDeviceId, listingId, kwhRequested, buyerLatitude, buyerLongitude } = params;
 
     if (kwhRequested <= 0) {
       throw new Error('Requested energy must be greater than 0 kWh');
@@ -292,6 +307,17 @@ export class MarketplaceService {
 
     try {
       await client.query('BEGIN');
+
+      // Checkout is permanently bound to a meter owned by the buyer.
+      const buyerDevice = await client.query(
+        `SELECT 1 FROM devices d
+         WHERE d.device_id = $1 AND d.owner_id = $2
+         FOR UPDATE`,
+        [buyerDeviceId, buyerId]
+      );
+      if (!buyerDevice.rows.length) {
+        throw new Error('Select a meter assigned to your account before checkout');
+      }
 
       // Lock listing row for update to prevent concurrent overselling
       const listingRes = await client.query(
@@ -360,17 +386,19 @@ export class MarketplaceService {
 
       const purchaseRes = await client.query(
         `INSERT INTO marketplace_purchases
-         (purchase_reference, listing_id, buyer_id, seller_id, device_id, distance_m, price_per_kwh, kwh_requested, amount, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'RESERVED')
+         (purchase_reference, listing_id, buyer_id, seller_id, device_id, seller_device_id, distance_m, price_per_kwh, kwh_requested, amount, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'RESERVED')
          RETURNING id, purchase_reference AS "purchaseReference", listing_id AS "listingId",
                    buyer_id AS "buyerId", seller_id AS "sellerId", device_id AS "deviceId",
-                   distance_m AS "distanceMeters", price_per_kwh AS "pricePerKwh",
-                   kwh_requested AS "kwhRequested", amount, status, created_at AS "createdAt"`,
+                   seller_device_id AS "sellerDeviceId", distance_m AS "distanceMeters",
+                   price_per_kwh AS "pricePerKwh", kwh_requested AS "kwhRequested", amount,
+                   status, created_at AS "createdAt"`,
         [
           purchaseReference,
           listingId,
           buyerId,
           listing.seller_id,
+          buyerDeviceId,
           listing.device_id,
           distanceMeters,
           pricePerKwh,
@@ -451,6 +479,7 @@ export class MarketplaceService {
     const result = await pool.query(
       `SELECT p.id, p.purchase_reference AS "purchaseReference", p.listing_id AS "listingId",
               p.buyer_id AS "buyerId", p.seller_id AS "sellerId", p.device_id AS "deviceId",
+              p.seller_device_id AS "sellerDeviceId",
               p.distance_m AS "distanceMeters", p.price_per_kwh AS "pricePerKwh",
               p.kwh_requested AS "kwhRequested", p.amount, p.status, p.paystack_reference AS "paystackReference",
               p.created_at AS "createdAt", p.updated_at AS "updatedAt",

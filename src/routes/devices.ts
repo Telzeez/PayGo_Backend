@@ -334,7 +334,16 @@ router.post('/:deviceId/balance', handleBalanceUpdate);
 router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
   try {
     const deviceId = req.params.deviceId as string;
-    const { remaining_balance } = req.body;
+    const { remaining_balance, ackBalanceReset } = req.body;
+
+    if (typeof ackBalanceReset === 'string' && ackBalanceReset) {
+      await pool.query(
+        `UPDATE devices SET balance_reset_requested_at = NULL
+         WHERE device_id = $1
+           AND (EXTRACT(EPOCH FROM balance_reset_requested_at) * 1000000)::bigint = $2::bigint`,
+        [deviceId, ackBalanceReset]
+      );
+    }
 
     if (!deviceId) {
       return res.status(400).json({ success: false, error: 'Missing device ID' });
@@ -364,8 +373,22 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
       );
     }
 
-    const devRes = await pool.query('SELECT current_balance FROM devices WHERE device_id = $1', [deviceId]);
+    const devRes = await pool.query(
+      'SELECT current_balance, balance_reset_requested_at, (EXTRACT(EPOCH FROM balance_reset_requested_at) * 1000000)::bigint::text AS reset_command_id FROM devices WHERE device_id = $1',
+      [deviceId]
+    );
     const balance = devRes.rows.length > 0 ? parseFloat(devRes.rows[0].current_balance) : 0;
+    const resetCommandId = devRes.rows[0]?.reset_command_id || null;
+
+    // The meter has checked in and is being sent the authoritative balance
+    // in this HTTPS response. Mark queued top-ups delivered; if the response
+    // is interrupted, the next heartbeat repeats this same balance sync.
+    await pool.query(
+      `UPDATE transactions
+       SET hardware_status = 'CONFIRMED'
+       WHERE device_id = $1 AND type = 'topup' AND hardware_status = 'PENDING'`,
+      [deviceId]
+    );
 
     const pendingRes = await pool.query(
       `SELECT transaction_id AS "transactionId", kwh_amount AS "kwhAmount"
@@ -380,6 +403,8 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
       deviceId,
       status: 'ONLINE',
       balance,
+      resetBalance: Boolean(resetCommandId),
+      resetCommandId,
       relayAction: balance > 0 ? 'OPEN' : 'CLOSE',
       pendingCredits: pendingRes.rows.map((r: any) => ({
         transactionId: r.transactionId,
