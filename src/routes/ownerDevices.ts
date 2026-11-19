@@ -12,8 +12,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       `SELECT DISTINCT d.device_id AS "deviceId", d.current_balance AS balance,
               d.status, d.last_seen_at AS "lastSeenAt", d.last_updated AS "lastUpdated"
        FROM devices d
-       LEFT JOIN energy_sources es ON es.device_id = d.device_id
-       WHERE d.owner_id = $1 OR es.owner_id = $1
+       WHERE d.owner_id = $1
        ORDER BY d.device_id`,
       [ownerId]
     );
