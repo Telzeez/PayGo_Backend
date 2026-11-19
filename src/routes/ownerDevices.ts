@@ -30,6 +30,52 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+router.get('/:deviceId/consumption', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ownerId = req.user!.userId;
+    const { deviceId } = req.params;
+    const period = String(req.query.period || 'week');
+    const intervals: Record<string, string> = { day: '1 day', week: '7 days', month: '30 days' };
+    if (!intervals[period]) {
+      return res.status(400).json({ success: false, error: 'Period must be day, week or month' });
+    }
+
+    const owned = await pool.query(
+      `SELECT 1 FROM devices d
+       WHERE d.device_id = $1
+         AND (d.owner_id = $2 OR EXISTS (
+           SELECT 1 FROM energy_sources es WHERE es.device_id = d.device_id AND es.owner_id = $2
+         )) LIMIT 1`,
+      [deviceId, ownerId]
+    );
+    if (!owned.rows.length) {
+      return res.status(404).json({ success: false, error: 'Meter not found in your account' });
+    }
+
+    const result = await pool.query(
+      `SELECT date_trunc('day', recorded_at) AS date,
+              SUM(kwh_consumed)::numeric(12,4) AS "kwhConsumed"
+       FROM meter_readings
+       WHERE device_id = $1 AND recorded_at >= NOW() - $2::interval
+       GROUP BY date_trunc('day', recorded_at)
+       ORDER BY date ASC`,
+      [deviceId, intervals[period]]
+    );
+    return res.setHeader('Cache-Control', 'no-store').json({
+      success: true,
+      deviceId,
+      period,
+      readings: result.rows.map((row: any) => ({
+        date: row.date,
+        kwhConsumed: Number(row.kwhConsumed || 0),
+      })),
+    });
+  } catch (error: any) {
+    console.error('Owner consumption report error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to load consumption report' });
+  }
+});
+
 router.get('/:deviceId', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const ownerId = req.user!.userId;
