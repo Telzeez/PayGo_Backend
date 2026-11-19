@@ -5,6 +5,41 @@ import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMidd
 const router = express.Router();
 router.use(authenticateToken);
 
+router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
+  const ownerId = req.user!.userId;
+  const deviceId = String(req.body?.deviceId || '').trim();
+
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId)) {
+    return res.status(400).json({ success: false, error: 'Enter a valid meter device ID (3–50 letters, numbers, hyphens or underscores).' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO devices (device_id, owner_id, current_balance, status)
+       VALUES ($1, $2, 0, 'OFFLINE')
+       ON CONFLICT (device_id)
+       DO UPDATE SET owner_id = COALESCE(devices.owner_id, EXCLUDED.owner_id)
+       WHERE devices.owner_id IS NULL OR devices.owner_id = EXCLUDED.owner_id
+       RETURNING device_id AS "deviceId", current_balance AS balance, status,
+                 last_seen_at AS "lastSeenAt", last_updated AS "lastUpdated"`,
+      [deviceId, ownerId]
+    );
+
+    if (!result.rows.length) {
+      return res.status(409).json({ success: false, error: 'This meter is already assigned to another account.' });
+    }
+
+    return res.status(201).json({
+      success: true,
+      device: { ...result.rows[0], balance: Number(result.rows[0].balance || 0) },
+      message: 'Meter connected to your account.',
+    });
+  } catch (error: any) {
+    console.error('Meter claim error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to connect this meter right now.' });
+  }
+});
+
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const ownerId = req.user!.userId;
