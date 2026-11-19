@@ -483,6 +483,7 @@ export class MarketplaceService {
     const result = await pool.query(
       `SELECT p.id, p.purchase_reference AS "purchaseReference", p.listing_id AS "listingId",
               p.buyer_id AS "buyerId", p.seller_id AS "sellerId", p.device_id AS "deviceId",
+              p.seller_device_id AS "sellerDeviceId",
               p.distance_m AS "distanceMeters", p.price_per_kwh AS "pricePerKwh",
               p.kwh_requested AS "kwhRequested", p.amount, p.status, p.paystack_reference AS "paystackReference",
               p.created_at AS "createdAt", p.updated_at AS "updatedAt",
