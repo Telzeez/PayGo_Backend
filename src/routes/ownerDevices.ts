@@ -29,6 +29,79 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+
+router.post('/:deviceId/reset-balance', async (req: AuthenticatedRequest, res: Response) => {
+  const ownerId = req.user!.userId;
+  const deviceId = String(req.params.deviceId || '').trim();
+  if (!deviceId) {
+    return res.status(400).json({ success: false, error: 'Missing meter ID' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT current_balance AS balance, status, last_seen_at AS "lastSeenAt"
+       FROM devices
+       WHERE device_id = $1 AND owner_id = $2
+       FOR UPDATE`,
+      [deviceId, ownerId]
+    );
+
+    if (!result.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, code: 'METER_NOT_FOUND', error: 'Meter not found in your account' });
+    }
+
+    const meter = result.rows[0];
+    const isFresh = meter.lastSeenAt &&
+      Date.now() - new Date(meter.lastSeenAt).getTime() <= 12000;
+    if (meter.status !== 'ONLINE' || !isFresh) {
+      await client.query(
+        `UPDATE devices SET status = 'OFFLINE'
+         WHERE device_id = $1 AND owner_id = $2`,
+        [deviceId, ownerId]
+      );
+      await client.query('COMMIT');
+      return res.status(409).json({
+        success: false,
+        code: 'DEVICE_OFFLINE',
+        error: "You can't reset this meter right now because it is offline. Reconnect the meter and try again."
+      });
+    }
+
+    const previousBalance = Number(meter.balance || 0);
+    await client.query(
+      `UPDATE devices
+       SET current_balance = 0,
+           balance_reset_requested_at = NOW(),
+           last_updated = NOW()
+       WHERE device_id = $1 AND owner_id = $2`,
+      [deviceId, ownerId]
+    );
+    await client.query(
+      `INSERT INTO device_balance_resets (device_id, owner_id, previous_balance, new_balance)
+       VALUES ($1, $2, $3, 0)`,
+      [deviceId, ownerId, previousBalance]
+    );
+    await client.query('COMMIT');
+
+    return res.json({
+      success: true,
+      deviceId,
+      balance: 0,
+      previousBalance,
+      message: 'Balance reset requested. The online meter will apply zero balance on its next HTTPS heartbeat.'
+    });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Owner meter balance reset error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to reset meter balance' });
+  } finally {
+    client.release();
+  }
+});
+
 router.get('/:deviceId/consumption', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const ownerId = req.user!.userId;
