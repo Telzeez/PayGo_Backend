@@ -46,7 +46,8 @@ export interface MarketplacePurchase {
   listingId: number;
   buyerId: number;
   sellerId: number;
-  deviceId: string;
+  deviceId: string; // Buyer's meter receiving purchased energy
+  sellerDeviceId?: string;
   distanceMeters: number;
   pricePerKwh: number;
   kwhRequested: number;
