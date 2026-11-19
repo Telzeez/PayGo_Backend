@@ -288,7 +288,7 @@ router.post('/register-google', async (req: Request, res: Response) => {
       return res.status(409).json({ success: false, error: 'User with this email already exists' });
     }
 
-    const isBuyer = role === 'BUYER';
+    const isBuyer = true;
     const isSeller = role === 'OWNER';
     const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
 
