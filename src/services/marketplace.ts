@@ -287,12 +287,13 @@ export class MarketplaceService {
    */
   static async createPurchaseIntent(params: {
     buyerId: number;
+    buyerDeviceId: string;
     listingId: number;
     kwhRequested: number;
     buyerLatitude: number;
     buyerLongitude: number;
   }): Promise<{ purchase: MarketplacePurchase; redirectUrl?: string }> {
-    const { buyerId, listingId, kwhRequested, buyerLatitude, buyerLongitude } = params;
+    const { buyerId, buyerDeviceId, listingId, kwhRequested, buyerLatitude, buyerLongitude } = params;
 
     if (kwhRequested <= 0) {
       throw new Error('Requested energy must be greater than 0 kWh');
@@ -306,6 +307,21 @@ export class MarketplaceService {
 
     try {
       await client.query('BEGIN');
+
+      // Checkout is permanently bound to a meter owned by the buyer.
+      const buyerDevice = await client.query(
+        `SELECT 1 FROM devices d
+         WHERE d.device_id = $1
+           AND (d.owner_id = $2 OR EXISTS (
+             SELECT 1 FROM energy_sources es
+             WHERE es.device_id = d.device_id AND es.owner_id = $2
+           ))
+         FOR UPDATE`,
+        [buyerDeviceId, buyerId]
+      );
+      if (!buyerDevice.rows.length) {
+        throw new Error('Select a meter assigned to your account before checkout');
+      }
 
       // Lock listing row for update to prevent concurrent overselling
       const listingRes = await client.query(
@@ -374,17 +390,19 @@ export class MarketplaceService {
 
       const purchaseRes = await client.query(
         `INSERT INTO marketplace_purchases
-         (purchase_reference, listing_id, buyer_id, seller_id, device_id, distance_m, price_per_kwh, kwh_requested, amount, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'RESERVED')
+         (purchase_reference, listing_id, buyer_id, seller_id, device_id, seller_device_id, distance_m, price_per_kwh, kwh_requested, amount, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'RESERVED')
          RETURNING id, purchase_reference AS "purchaseReference", listing_id AS "listingId",
                    buyer_id AS "buyerId", seller_id AS "sellerId", device_id AS "deviceId",
-                   distance_m AS "distanceMeters", price_per_kwh AS "pricePerKwh",
-                   kwh_requested AS "kwhRequested", amount, status, created_at AS "createdAt"`,
+                   seller_device_id AS "sellerDeviceId", distance_m AS "distanceMeters",
+                   price_per_kwh AS "pricePerKwh", kwh_requested AS "kwhRequested", amount,
+                   status, created_at AS "createdAt"`,
         [
           purchaseReference,
           listingId,
           buyerId,
           listing.seller_id,
+          buyerDeviceId,
           listing.device_id,
           distanceMeters,
           pricePerKwh,
