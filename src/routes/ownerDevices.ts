@@ -14,22 +14,35 @@ router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
   }
 
   try {
+    // A buyer may claim a meter only after the physical device has checked in
+    // and created its registry row. A meter already linked to another owner
+    // cannot be reassigned through this self-service endpoint.
     const result = await pool.query(
-      `INSERT INTO devices (device_id, owner_id, current_balance, status)
-       VALUES ($1, $2, 0, 'OFFLINE')
-       ON CONFLICT (device_id)
-       DO UPDATE SET owner_id = COALESCE(devices.owner_id, EXCLUDED.owner_id)
-       WHERE devices.owner_id IS NULL OR devices.owner_id = EXCLUDED.owner_id
-       RETURNING device_id AS "deviceId", current_balance AS balance, status,
-                 last_seen_at AS "lastSeenAt", last_updated AS "lastUpdated"`,
+      `UPDATE devices d
+       SET owner_id = $2
+       WHERE d.device_id = $1
+         AND (d.owner_id IS NULL OR d.owner_id = $2)
+         AND NOT EXISTS (
+           SELECT 1 FROM energy_sources es
+           WHERE es.device_id = d.device_id AND es.owner_id <> $2
+         )
+       RETURNING d.device_id AS "deviceId", d.current_balance AS balance, d.status,
+                 d.last_seen_at AS "lastSeenAt", d.last_updated AS "lastUpdated"`,
       [deviceId, ownerId]
     );
 
     if (!result.rows.length) {
-      return res.status(409).json({ success: false, error: 'This meter is already assigned to another account.' });
+      const existing = await pool.query(
+        'SELECT owner_id FROM devices WHERE device_id = $1',
+        [deviceId]
+      );
+      if (!existing.rows.length) {
+        return res.status(404).json({ success: false, code: 'METER_NOT_FOUND', error: 'This meter has not connected to the PAYGO server yet. Power it on and wait for its first heartbeat, then try again.' });
+      }
+      return res.status(409).json({ success: false, code: 'METER_ALREADY_ASSIGNED', error: 'This meter is already assigned to another account.' });
     }
 
-    return res.status(201).json({
+    return res.status(200).json({
       success: true,
       device: { ...result.rows[0], balance: Number(result.rows[0].balance || 0) },
       message: 'Meter connected to your account.',
