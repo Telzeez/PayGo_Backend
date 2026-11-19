@@ -311,11 +311,7 @@ export class MarketplaceService {
       // Checkout is permanently bound to a meter owned by the buyer.
       const buyerDevice = await client.query(
         `SELECT 1 FROM devices d
-         WHERE d.device_id = $1
-           AND (d.owner_id = $2 OR EXISTS (
-             SELECT 1 FROM energy_sources es
-             WHERE es.device_id = d.device_id AND es.owner_id = $2
-           ))
+         WHERE d.device_id = $1 AND d.owner_id = $2
          FOR UPDATE`,
         [buyerDeviceId, buyerId]
       );
