@@ -189,18 +189,19 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
-    const listingId = parseInt(`$req.params.id}`, 10);
-    const { kwhRequested, buyerLatitude, buyerLongitude } = req.body;
+    const listingId = parseInt(`${req.params.id}`, 10);
+    const { kwhRequested, buyerLatitude, buyerLongitude, buyerDeviceId } = req.body;
 
-    if (!kwhRequested || buyerLatitude === undefined || buyerLongitude === undefined) {
+    if (!kwhRequested || !buyerDeviceId || buyerLatitude === undefined || buyerLongitude === undefined) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required parameters: kwhRequested, buyerLatitude, buyerLongitude',
+        error: 'Missing required parameters: kwhRequested, buyerDeviceId, buyerLatitude, buyerLongitude',
       });
     }
 
     const result = await MarketplaceService.createPurchaseIntent({
       buyerId: req.user.userId,
+      buyerDeviceId,
       listingId,
       kwhRequested: parseFloat(kwhRequested),
       buyerLatitude: parseFloat(buyerLatitude),
