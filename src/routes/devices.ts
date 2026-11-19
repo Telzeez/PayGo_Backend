@@ -367,6 +367,16 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
     const devRes = await pool.query('SELECT current_balance FROM devices WHERE device_id = $1', [deviceId]);
     const balance = devRes.rows.length > 0 ? parseFloat(devRes.rows[0].current_balance) : 0;
 
+    // The meter has checked in and is being sent the authoritative balance
+    // in this HTTPS response. Mark queued top-ups delivered; if the response
+    // is interrupted, the next heartbeat repeats this same balance sync.
+    await pool.query(
+      `UPDATE transactions
+       SET hardware_status = 'CONFIRMED'
+       WHERE device_id = $1 AND type = 'topup' AND hardware_status = 'PENDING'`,
+      [deviceId]
+    );
+
     const pendingRes = await pool.query(
       `SELECT transaction_id AS "transactionId", kwh_amount AS "kwhAmount"
        FROM transactions
