@@ -34,7 +34,7 @@ router.get('/:deviceId/consumption', async (req: AuthenticatedRequest, res: Resp
     const ownerId = req.user!.userId;
     const { deviceId } = req.params;
     const period = String(req.query.period || 'week');
-    const intervals: Record<string, string> = { day: '1 day', week: '7 days', month: '30 days' };
+    const intervals: Record<string, string> = { day: '1 day', week: '7 days', month: '1 month' };
     if (!intervals[period]) {
       return res.status(400).json({ success: false, error: 'Period must be day, week or month' });
     }
