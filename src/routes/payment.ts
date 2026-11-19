@@ -21,10 +21,7 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
 
     const owned = await pool.query(
       `SELECT 1 FROM devices d
-       WHERE d.device_id = $1
-         AND (d.owner_id = $2 OR EXISTS (
-           SELECT 1 FROM energy_sources es WHERE es.device_id = d.device_id AND es.owner_id = $2
-         ))
+       WHERE d.device_id = $1 AND d.owner_id = $2
        LIMIT 1`,
       [deviceId, req.user!.userId]
     );
