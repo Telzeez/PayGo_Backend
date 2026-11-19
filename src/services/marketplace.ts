@@ -35,14 +35,28 @@ export class MarketplaceService {
       throw new Error(`Service radius must be between 1 and ${DEFAULT_PLATFORM_MAX_RADIUS_METERS} meters`);
     }
 
-    // Verify device exists
-    const deviceCheck = await pool.query('SELECT id FROM devices WHERE device_id = $1', [deviceId]);
-    if (deviceCheck.rows.length === 0) {
-      // Auto-register device if missing for seamless setup
-      await pool.query('INSERT INTO devices (device_id, current_balance, status) VALUES ($1, 0, $2)', [
-        deviceId,
-        'ONLINE',
-      ]);
+    // A physical meter can belong to only one owner. Existing unassigned
+    // devices may be associated with this owner; already-owned devices cannot
+    // be silently claimed by another account.
+    const otherOwnerSource = await pool.query(
+      'SELECT 1 FROM energy_sources WHERE device_id = $1 AND owner_id <> $2 LIMIT 1',
+      [deviceId, ownerId]
+    );
+    if (otherOwnerSource.rows.length) {
+      throw new Error('This meter is already associated with another owner');
+    }
+
+    const deviceCheck = await pool.query(
+      `INSERT INTO devices (device_id, owner_id, current_balance, status)
+       VALUES ($1, $2, 0, 'OFFLINE')
+       ON CONFLICT (device_id)
+       DO UPDATE SET owner_id = COALESCE(devices.owner_id, EXCLUDED.owner_id)
+       WHERE devices.owner_id IS NULL OR devices.owner_id = EXCLUDED.owner_id
+       RETURNING id`,
+      [deviceId, ownerId]
+    );
+    if (!deviceCheck.rows.length) {
+      throw new Error('This meter is already assigned to another owner');
     }
 
     const result = await pool.query(
