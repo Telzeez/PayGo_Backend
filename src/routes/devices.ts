@@ -334,7 +334,15 @@ router.post('/:deviceId/balance', handleBalanceUpdate);
 router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
   try {
     const deviceId = req.params.deviceId as string;
-    const { remaining_balance } = req.body;
+    const { remaining_balance, ackBalanceReset } = req.body;
+
+    if (typeof ackBalanceReset === 'string' && ackBalanceReset) {
+      await pool.query(
+        `UPDATE devices SET balance_reset_requested_at = NULL
+         WHERE device_id = $1 AND balance_reset_requested_at = $2::timestamptz`,
+        [deviceId, ackBalanceReset]
+      );
+    }
 
     if (!deviceId) {
       return res.status(400).json({ success: false, error: 'Missing device ID' });
@@ -364,8 +372,14 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
       );
     }
 
-    const devRes = await pool.query('SELECT current_balance FROM devices WHERE device_id = $1', [deviceId]);
+    const devRes = await pool.query(
+      'SELECT current_balance, balance_reset_requested_at FROM devices WHERE device_id = $1',
+      [deviceId]
+    );
     const balance = devRes.rows.length > 0 ? parseFloat(devRes.rows[0].current_balance) : 0;
+    const resetCommandId = devRes.rows[0]?.balance_reset_requested_at
+      ? new Date(devRes.rows[0].balance_reset_requested_at).toISOString()
+      : null;
 
     // The meter has checked in and is being sent the authoritative balance
     // in this HTTPS response. Mark queued top-ups delivered; if the response
@@ -390,6 +404,8 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
       deviceId,
       status: 'ONLINE',
       balance,
+      resetBalance: Boolean(resetCommandId),
+      resetCommandId,
       relayAction: balance > 0 ? 'OPEN' : 'CLOSE',
       pendingCredits: pendingRes.rows.map((r: any) => ({
         transactionId: r.transactionId,
