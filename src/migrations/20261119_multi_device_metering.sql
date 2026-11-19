@@ -90,3 +90,20 @@ SET owner_id = u.owner_id
 FROM unambiguous_owners u
 WHERE d.device_id = u.device_id
   AND d.owner_id IS NULL;
+
+
+-- Owner-requested balance resets are acknowledged by the ESP32 over HTTPS.
+ALTER TABLE devices
+  ADD COLUMN IF NOT EXISTS balance_reset_requested_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS device_balance_resets (
+  id BIGSERIAL PRIMARY KEY,
+  device_id VARCHAR(50) NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+  owner_id INT NOT NULL REFERENCES users(id),
+  previous_balance DECIMAL(12,4) NOT NULL,
+  new_balance DECIMAL(12,4) NOT NULL DEFAULT 0,
+  reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_balance_resets_device_time
+  ON device_balance_resets(device_id, reset_at DESC);
