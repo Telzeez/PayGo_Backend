@@ -84,11 +84,7 @@ router.get('/:deviceId', async (req: AuthenticatedRequest, res: Response) => {
       `SELECT d.device_id AS "deviceId", d.current_balance AS balance, d.status,
               d.last_seen_at AS "lastSeenAt", d.last_updated AS "lastUpdated"
        FROM devices d
-       WHERE d.device_id = $1
-         AND (d.owner_id = $2 OR EXISTS (
-           SELECT 1 FROM energy_sources es
-           WHERE es.device_id = d.device_id AND es.owner_id = $2
-         ))
+       WHERE d.device_id = $1 AND d.owner_id = $2
        LIMIT 1`,
       [deviceId, ownerId]
     );
