@@ -19,7 +19,7 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 // ==========================================
 router.post('/register', async (req: Request, res: Response) => {
   try {
-    const { email, password, phone } = req.body as RegisterRequest;
+    const { email, password, phone, role = 'BUYER' } = req.body as RegisterRequest & { role?: string };
 
     if (!email || !password) {
       return res.status(400).json({
@@ -35,9 +35,14 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    const assignedRole = 'USER';
+    if (role !== 'BUYER' && role !== 'OWNER') {
+      return res.status(400).json({ success: false, error: 'Account type must be BUYER or OWNER' });
+    }
+
+    // Every account can buy energy; OWNER additionally enables seller capabilities.
+    const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
     const isBuyer = true;
-    const isSeller = false;
+    const isSeller = role === 'OWNER';
     const normalizedEmail = email.trim().toLowerCase();
 
     // Check if user already exists
