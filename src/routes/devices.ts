@@ -339,7 +339,8 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
     if (typeof ackBalanceReset === 'string' && ackBalanceReset) {
       await pool.query(
         `UPDATE devices SET balance_reset_requested_at = NULL
-         WHERE device_id = $1 AND balance_reset_requested_at = $2::timestamptz`,
+         WHERE device_id = $1
+           AND (EXTRACT(EPOCH FROM balance_reset_requested_at) * 1000000)::bigint = $2::bigint`,
         [deviceId, ackBalanceReset]
       );
     }
@@ -373,13 +374,11 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
     }
 
     const devRes = await pool.query(
-      'SELECT current_balance, balance_reset_requested_at FROM devices WHERE device_id = $1',
+      'SELECT current_balance, balance_reset_requested_at, (EXTRACT(EPOCH FROM balance_reset_requested_at) * 1000000)::bigint::text AS reset_command_id FROM devices WHERE device_id = $1',
       [deviceId]
     );
     const balance = devRes.rows.length > 0 ? parseFloat(devRes.rows[0].current_balance) : 0;
-    const resetCommandId = devRes.rows[0]?.balance_reset_requested_at
-      ? new Date(devRes.rows[0].balance_reset_requested_at).toISOString()
-      : null;
+    const resetCommandId = devRes.rows[0]?.reset_command_id || null;
 
     // The meter has checked in and is being sent the authoritative balance
     // in this HTTPS response. Mark queued top-ups delivered; if the response
