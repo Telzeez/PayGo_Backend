@@ -6,6 +6,15 @@ ALTER TABLE devices
 
 CREATE INDEX IF NOT EXISTS idx_devices_owner_id ON devices(owner_id);
 
+-- Marketplace checkout must capture the buyer's destination meter separately
+-- from the seller's source meter.
+ALTER TABLE marketplace_purchases
+  ADD COLUMN IF NOT EXISTS seller_device_id VARCHAR(50) REFERENCES devices(device_id);
+
+UPDATE marketplace_purchases p
+SET seller_device_id = p.device_id
+WHERE seller_device_id IS NULL;
+
 -- Associate existing meters with their current energy-source owner where the
 -- device has one unambiguous owner. Ambiguous devices remain unassigned.
 WITH unambiguous_owners AS (
