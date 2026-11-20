@@ -59,7 +59,10 @@ export class MarketplaceService {
        (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
        RETURNING id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
-                 service_radius_m AS "serviceRadiusMeters", status, created_at AS "createdAt", updated_at AS "updatedAt"`,
+                 service_radius_m AS "serviceRadiusMeters",
+                 max_capacity_w AS "maxCapacityW", max_capacity_va AS "maxCapacityVa",
+                 max_surge_va AS "maxSurgeVa", safety_margin_pct AS "safetyMarginPct",
+                 status, created_at AS "createdAt", updated_at AS "updatedAt"`,
       [ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters]
     );
 
@@ -72,7 +75,10 @@ export class MarketplaceService {
   static async getSellerSources(ownerId: number): Promise<EnergySource[]> {
     const result = await pool.query(
       `SELECT id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
-              service_radius_m AS "serviceRadiusMeters", status, created_at AS "createdAt", updated_at AS "updatedAt"
+              service_radius_m AS "serviceRadiusMeters",
+              max_capacity_w AS "maxCapacityW", max_capacity_va AS "maxCapacityVa",
+              max_surge_va AS "maxSurgeVa", safety_margin_pct AS "safetyMarginPct",
+              status, created_at AS "createdAt", updated_at AS "updatedAt"
        FROM energy_sources
        WHERE owner_id = $1 AND status != 'DECOMMISSIONED'
        ORDER BY created_at DESC`,
@@ -307,6 +313,8 @@ export class MarketplaceService {
       const buyerDevice = await client.query(
         `SELECT 1 FROM devices d
          WHERE d.device_id = $1 AND d.owner_id = $2
+           AND d.assignment_status = 'ACTIVATED'
+           AND d.meter_purpose = 'RECEIVING'
          FOR UPDATE`,
         [buyerDeviceId, buyerId]
       );
@@ -336,6 +344,20 @@ export class MarketplaceService {
 
       if (listing.seller_id === buyerId) {
         throw new Error('Sellers cannot purchase from their own energy listing');
+      }
+
+      // Checkout is allowed only after the prosumer has approved this
+      // customer's appliance load and the dedicated receiving meter is linked.
+      const approvedConnection = await client.query(
+        `SELECT id FROM customer_connections
+         WHERE source_id = $1 AND customer_id = $2
+           AND receiving_device_id = $3 AND status IN ('APPROVED', 'PENDING_REVISION')
+           AND approved_power_w IS NOT NULL
+         FOR UPDATE`,
+        [listing.energy_source_id, buyerId, buyerDeviceId]
+      );
+      if (!approvedConnection.rows.length) {
+        throw new Error('A prosumer-approved connection and activated receiving meter are required before checkout.');
       }
 
       const availableKwh = parseFloat(listing.available_kwh);

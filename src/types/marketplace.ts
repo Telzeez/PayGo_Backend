@@ -22,6 +22,10 @@ export interface EnergySource {
   latitude: number;
   longitude: number;
   serviceRadiusMeters: number;
+  maxCapacityW?: number | null;
+  maxCapacityVa?: number | null;
+  maxSurgeVa?: number | null;
+  safetyMarginPct?: number | null;
   status: SourceStatus;
   createdAt: string;
   updatedAt: string;

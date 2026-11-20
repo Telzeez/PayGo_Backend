@@ -22,9 +22,15 @@ const initDb = async () => {
     if (sqlPath) {
       await pool.query(fs.readFileSync(sqlPath, 'utf8'));
       console.log(`Database tables initialized successfully from ${sqlPath}`);
-      // Apply Firebase identity before provisioning constraints so legacy
-      // duplicate meter rows cannot block authentication schema setup.
-      const migrationFiles = ['20261119_multi_device_metering.sql', '20261120_email_verification.sql', '20261122_firebase_identity.sql', '20261123_device_assignment_columns.sql', '20261121_device_provisioning.sql'];
+      // Apply identity and device provisioning migrations before dependent schema.
+      const migrationFiles = [
+        '20261119_multi_device_metering.sql',
+        '20261120_email_verification.sql',
+        '20261122_firebase_identity.sql',
+        '20261123_device_assignment_columns.sql',
+        '20261121_device_provisioning.sql',
+        '20261124_customer_load_assessment.sql',
+      ];
       for (const migrationFile of migrationFiles) {
         const migrationPath = path.join(path.dirname(sqlPath), 'migrations', migrationFile);
         if (!fs.existsSync(migrationPath)) continue;
