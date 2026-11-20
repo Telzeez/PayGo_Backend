@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   phone VARCHAR(50),
-  password_hash VARCHAR(255) NOT NULL,
+  password_hash VARCHAR(255),
   role VARCHAR(20) NOT NULL DEFAULT 'USER',
   is_buyer BOOLEAN DEFAULT true,
   is_seller BOOLEAN DEFAULT false,
