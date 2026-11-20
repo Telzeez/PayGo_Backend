@@ -350,7 +350,7 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
     }
 
     const devRes = await pool.query(
-      'SELECT current_balance, balance_reset_requested_at, (EXTRACT(EPOCH FROM balance_reset_requested_at) * 1000000)::bigint::text AS reset_command_id FROM devices WHERE device_id = $1',
+      'SELECT current_balance, assignment_status, balance_reset_requested_at, (EXTRACT(EPOCH FROM balance_reset_requested_at) * 1000000)::bigint::text AS reset_command_id FROM devices WHERE device_id = $1',
       [deviceId]
     );
     const balance = devRes.rows.length > 0 ? parseFloat(devRes.rows[0].current_balance) : 0;
@@ -378,6 +378,7 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
       success: true,
       deviceId,
       status: 'ONLINE',
+      assignmentStatus: devRes.rows[0]?.assignment_status || 'UNASSIGNED',
       balance,
       resetBalance: Boolean(resetCommandId),
       resetCommandId,
