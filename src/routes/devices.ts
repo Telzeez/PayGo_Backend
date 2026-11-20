@@ -6,31 +6,7 @@ import { Device, Transaction } from '../types/index.js';
 
 const router = express.Router();
 
-router.get('/reset-offline', async (req: Request, res: Response) => {
-  try {
-    await pool.query("UPDATE devices SET status = 'OFFLINE', last_seen_at = NULL WHERE device_id = 'DEVICE-001'");
-    res.json({ success: true, message: "DEVICE-001 has been reset to OFFLINE. You can safely remove this endpoint." });
-  } catch (error: any) {
-    console.error('Reset error:', error);
-    res.status(500).json({ success: false, error: error?.message || 'Failed to reset device' });
-  }
-});
-
-router.all('/reset-all', async (req: Request, res: Response) => {
-  try {
-    await pool.query('TRUNCATE TABLE transactions RESTART IDENTITY CASCADE;');
-    await pool.query('TRUNCATE TABLE paygo_tokens RESTART IDENTITY CASCADE;');
-    await pool.query('TRUNCATE TABLE marketplace_purchases RESTART IDENTITY CASCADE;');
-    await pool.query("UPDATE devices SET current_balance = 0, status = 'OFFLINE', last_seen_at = NULL, last_updated = NOW(); DELETE FROM devices WHERE device_id = 'reset-all';");
-    return res.json({
-      success: true,
-      message: "Successfully cleared all transactions, tokens, and reset device balances to 0 kWh."
-    });
-  } catch (error: any) {
-    console.error('Reset all error:', error);
-    return res.status(500).json({ success: false, error: error?.message || 'Failed to reset database' });
-  }
-});
+// Legacy unauthenticated database reset endpoints were removed.
 
 router.get('/:deviceId', async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

@@ -22,10 +22,13 @@ const initDb = async () => {
     if (sqlPath) {
       await pool.query(fs.readFileSync(sqlPath, 'utf8'));
       console.log(`Database tables initialized successfully from ${sqlPath}`);
-      const migrationPath = path.join(path.dirname(sqlPath), 'migrations', '20261119_multi_device_metering.sql');
-      if (fs.existsSync(migrationPath)) {
-        await pool.query(fs.readFileSync(migrationPath, 'utf8'));
-        console.log('PAYGO multi-device metering migration applied.');
+      const migrationFiles = ['20261119_multi_device_metering.sql', '20261120_email_verification.sql', '20261121_device_provisioning.sql'];
+      for (const migrationFile of migrationFiles) {
+        const migrationPath = path.join(path.dirname(sqlPath), 'migrations', migrationFile);
+        if (fs.existsSync(migrationPath)) {
+          await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+          console.log(`PAYGO migration applied: ${migrationFile}`);
+        }
       }
     } else {
       console.warn('Warning: init-db.sql was not found in candidate locations.');

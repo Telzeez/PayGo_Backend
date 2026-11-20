@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   phone VARCHAR(50),
-  password_hash VARCHAR(255) NOT NULL,
+  password_hash VARCHAR(255),
   role VARCHAR(20) NOT NULL DEFAULT 'USER',
   is_buyer BOOLEAN DEFAULT true,
   is_seller BOOLEAN DEFAULT false,
@@ -148,44 +148,8 @@ CREATE INDEX IF NOT EXISTS idx_marketplace_purchases_buyer ON marketplace_purcha
 CREATE INDEX IF NOT EXISTS idx_marketplace_purchases_seller ON marketplace_purchases(seller_id);
 
 -- ======================================================
--- SEED DEMO DATA FOR PROTOTYPE DEMONSTRATION
--- ======================================================
+-- Only the physical meter registry is seeded for a fresh demo database.
+-- No demo users, seller sources, or marketplace listings are created automatically.
 INSERT INTO devices (device_id, current_balance, status, last_seen_at)
-VALUES ('DEVICE-001', 30.00, 'OFFLINE', NULL)
+VALUES ('DEVICE-001', 0.00, 'OFFLINE', NULL)
 ON CONFLICT (device_id) DO NOTHING;
-
-INSERT INTO users (email, phone, password_hash, role)
-VALUES ('seller_demo@paygo.com', '+2349016971707', '$2b$10$e7K4y5Q8z1K3v7X8M9L0Oe.9.1.1.1.1.1.1.1.1', 'OWNER')
-ON CONFLICT (email) DO NOTHING;
-
--- Seed Seller Sources near Ibadan test coordinates (7.44, 3.90)
-INSERT INTO energy_sources (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
-SELECT u.id, 'DEVICE-001', 'Rooftop Solar Home A', 7.4416, 3.9000, 500, 'ACTIVE'
-FROM users u WHERE u.email = 'seller_demo@paygo.com'
-AND NOT EXISTS (SELECT 1 FROM energy_sources WHERE name = 'Rooftop Solar Home A');
-
-INSERT INTO energy_sources (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
-SELECT u.id, 'DEVICE-001', 'Solar Microgrid B', 7.4438, 3.9000, 1000, 'ACTIVE'
-FROM users u WHERE u.email = 'seller_demo@paygo.com'
-AND NOT EXISTS (SELECT 1 FROM energy_sources WHERE name = 'Solar Microgrid B');
-
-INSERT INTO energy_sources (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
-SELECT u.id, 'DEVICE-001', 'Distant Solar Array C', 7.4560, 3.9000, 500, 'ACTIVE'
-FROM users u WHERE u.email = 'seller_demo@paygo.com'
-AND NOT EXISTS (SELECT 1 FROM energy_sources WHERE name = 'Distant Solar Array C');
-
--- Seed Active Energy Listings
-INSERT INTO energy_listings (energy_source_id, seller_id, available_kwh, reserved_kwh, price_per_kwh, status)
-SELECT s.id, s.owner_id, 4.80, 0, 250.00, 'ACTIVE'
-FROM energy_sources s WHERE s.name = 'Rooftop Solar Home A'
-AND NOT EXISTS (SELECT 1 FROM energy_listings WHERE energy_source_id = s.id);
-
-INSERT INTO energy_listings (energy_source_id, seller_id, available_kwh, reserved_kwh, price_per_kwh, status)
-SELECT s.id, s.owner_id, 8.20, 0, 230.00, 'ACTIVE'
-FROM energy_sources s WHERE s.name = 'Solar Microgrid B'
-AND NOT EXISTS (SELECT 1 FROM energy_listings WHERE energy_source_id = s.id);
-
-INSERT INTO energy_listings (energy_source_id, seller_id, available_kwh, reserved_kwh, price_per_kwh, status)
-SELECT s.id, s.owner_id, 15.00, 0, 200.00, 'ACTIVE'
-FROM energy_sources s WHERE s.name = 'Distant Solar Array C'
-AND NOT EXISTS (SELECT 1 FROM energy_listings WHERE energy_source_id = s.id);
