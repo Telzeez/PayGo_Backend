@@ -252,9 +252,9 @@ router.get('/:deviceId/consumption', async (req: AuthenticatedRequest, res: Resp
     const ownerId = req.user!.userId;
     const { deviceId } = req.params;
     const period = String(req.query.period || 'week');
-    const intervals: Record<string, string> = { day: '1 day', week: '7 days', month: '1 month' };
+    const intervals: Record<string, string> = { day: '1 day', week: '7 days', month: '1 month', year: '1 year' };
     if (!intervals[period]) {
-      return res.status(400).json({ success: false, error: 'Period must be day, week or month' });
+      return res.status(400).json({ success: false, error: 'Period must be day, week, month or year' });
     }
 
     const owned = await pool.query(
@@ -270,13 +270,13 @@ router.get('/:deviceId/consumption', async (req: AuthenticatedRequest, res: Resp
     }
 
     const result = await pool.query(
-      `SELECT date_trunc('day', recorded_at) AS date,
+      `SELECT date_trunc($3, recorded_at) AS date,
               SUM(kwh_consumed)::numeric(12,4) AS "kwhConsumed"
        FROM meter_readings
        WHERE device_id = $1 AND recorded_at >= NOW() - $2::interval
-       GROUP BY date_trunc('day', recorded_at)
+       GROUP BY date_trunc($3, recorded_at)
        ORDER BY date ASC`,
-      [deviceId, intervals[period]]
+      [deviceId, intervals[period], period === 'year' ? 'month' : 'day']
     );
     return res.setHeader('Cache-Control', 'no-store').json({
       success: true,
