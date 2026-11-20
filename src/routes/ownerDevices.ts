@@ -14,7 +14,8 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
   }
   const deviceId = String(req.params.deviceId || '').trim();
   const ownerId = Number(req.body?.ownerId);
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !Number.isInteger(ownerId) || ownerId <= 0) {
+  const meterPurpose = String(req.body?.purpose || 'GENERATION').toUpperCase();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !Number.isInteger(ownerId) || ownerId <= 0 || !['GENERATION', 'RECEIVING'].includes(meterPurpose)) {
     return res.status(400).json({ success: false, error: 'A valid registered device ID and owner account ID are required.' });
   }
 
@@ -31,7 +32,7 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
       return res.status(409).json({ success: false, error: 'The target owner must verify their email before a meter can be assigned.' });
     }
     const device = await client.query(
-      `SELECT device_id, owner_id, assignment_status FROM devices WHERE device_id = $1 FOR UPDATE`,
+      `SELECT device_id, owner_id, assignment_status, meter_purpose FROM devices WHERE device_id = $1 FOR UPDATE`,
       [deviceId]
     );
     if (!device.rows.length) {
@@ -50,9 +51,9 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
     const rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
     const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
     await client.query(
-      `UPDATE devices SET owner_id = $2, assignment_status = 'ASSIGNED', assigned_at = NOW()
+      `UPDATE devices SET owner_id = $2, assignment_status = 'ASSIGNED', assigned_at = NOW(), meter_purpose = $3
        WHERE device_id = $1`,
-      [deviceId, ownerId]
+      [deviceId, ownerId, meterPurpose]
     );
     await client.query(
       `UPDATE device_activation_codes SET used_at = NOW()
@@ -131,10 +132,12 @@ router.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
       [deviceId, ownerId]
     );
     // Activation unlocks the seller capability without creating a second account.
-    await client.query(
-      `UPDATE users SET is_seller = TRUE, role = 'OWNER', updated_at = NOW() WHERE id = $1`,
-      [ownerId]
-    );
+    if (device.rows[0].meter_purpose === 'GENERATION') {
+      await client.query(
+        `UPDATE users SET is_seller = TRUE, role = 'OWNER', updated_at = NOW() WHERE id = $1`,
+        [ownerId]
+      );
+    }
     await client.query('COMMIT');
     return res.json({ success: true, deviceId, message: 'Your PAYGO meter is now activated.' });
   } catch (error: any) {
