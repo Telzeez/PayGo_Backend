@@ -59,7 +59,10 @@ export class MarketplaceService {
        (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
        RETURNING id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
-                 service_radius_m AS "serviceRadiusMeters", status, created_at AS "createdAt", updated_at AS "updatedAt"`,
+                 service_radius_m AS "serviceRadiusMeters",
+                 max_capacity_w AS "maxCapacityW", max_capacity_va AS "maxCapacityVa",
+                 max_surge_va AS "maxSurgeVa", safety_margin_pct AS "safetyMarginPct",
+                 status, created_at AS "createdAt", updated_at AS "updatedAt"`,
       [ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters]
     );
 
@@ -72,7 +75,10 @@ export class MarketplaceService {
   static async getSellerSources(ownerId: number): Promise<EnergySource[]> {
     const result = await pool.query(
       `SELECT id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
-              service_radius_m AS "serviceRadiusMeters", status, created_at AS "createdAt", updated_at AS "updatedAt"
+              service_radius_m AS "serviceRadiusMeters",
+              max_capacity_w AS "maxCapacityW", max_capacity_va AS "maxCapacityVa",
+              max_surge_va AS "maxSurgeVa", safety_margin_pct AS "safetyMarginPct",
+              status, created_at AS "createdAt", updated_at AS "updatedAt"
        FROM energy_sources
        WHERE owner_id = $1 AND status != 'DECOMMISSIONED'
        ORDER BY created_at DESC`,
