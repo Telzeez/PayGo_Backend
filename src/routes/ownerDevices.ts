@@ -121,7 +121,7 @@ router.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
   const deviceId = String(req.body?.deviceId || '').trim();
   const code = String(req.body?.activationCode || '').trim().toUpperCase();
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !/^[A-F0-9]{10}$/.test(code)) {
-    return res.status(400).json({ success: false, error: 'Enter the meter ID and the 10-character activation code supplied by PAYGO.' });
+    return res.status(400).json({ success: false, error: 'Enter the meter ID and the 10-character one-time code supplied by PAYGO.' });
   }
 
   const client = await pool.connect();
@@ -132,7 +132,70 @@ router.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
        WHERE device_id = $1 FOR UPDATE`,
       [deviceId]
     );
-    if (!device.rows.length || Number(device.rows[0].owner_id) !== ownerId) {
+    if (!device.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Meter not found in the PAYGO registry.' });
+    }
+
+    // Compatibility path for the currently deployed 10-character activation form.
+    // A short one-time credential can claim an unassigned registered meter without
+    // requiring a Vercel frontend deployment. It is still hashed, expiring, single-use,
+    // and limited to five failed attempts.
+    if (device.rows[0].owner_id === null && device.rows[0].assignment_status === 'UNASSIGNED') {
+      const shortCodeHash = crypto.createHash('sha256').update(code).digest('hex');
+      const claim = await client.query(
+        `SELECT id FROM device_claim_tokens
+         WHERE device_id = $1 AND token_hash = $2
+           AND claimed_at IS NULL AND expires_at > NOW() AND failed_attempts < 5
+         FOR UPDATE`,
+        [deviceId, shortCodeHash]
+      );
+
+      if (!claim.rows.length) {
+        await client.query(
+          `UPDATE device_claim_tokens SET failed_attempts = failed_attempts + 1
+           WHERE device_id = $1 AND claimed_at IS NULL
+             AND expires_at > NOW() AND failed_attempts < 5`,
+          [deviceId]
+        );
+        await client.query('COMMIT');
+        return res.status(400).json({ success: false, error: 'Invalid, expired, or previously used activation code.' });
+      }
+
+      const purpose = device.rows[0].meter_purpose;
+      if (!['GENERATION', 'RECEIVING'].includes(purpose)) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'This meter has no valid registered purpose.' });
+      }
+
+      await client.query(
+        `UPDATE devices SET owner_id = $2, assignment_status = 'ACTIVATED',
+           assigned_at = NOW(), claimed_at = NOW(), last_updated = NOW()
+         WHERE device_id = $1 AND owner_id IS NULL AND assignment_status = 'UNASSIGNED'`,
+        [deviceId, ownerId]
+      );
+      await client.query(
+        'UPDATE device_claim_tokens SET claimed_at = NOW() WHERE id = $1',
+        [claim.rows[0].id]
+      );
+      if (purpose === 'GENERATION') {
+        await client.query(
+          `UPDATE users SET is_seller = TRUE, role = 'OWNER', updated_at = NOW()
+           WHERE id = $1`,
+          [ownerId]
+        );
+      }
+      await client.query('COMMIT');
+      return res.json({
+        success: true,
+        deviceId,
+        message: purpose === 'GENERATION'
+          ? 'Your generation meter is now activated on your prosumer account.'
+          : 'Your receiving meter is now activated on your account.'
+      });
+    }
+
+    if (Number(device.rows[0].owner_id) !== ownerId) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, error: 'No meter has been assigned to this account with that ID.' });
     }
