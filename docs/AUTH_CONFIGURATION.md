@@ -17,24 +17,26 @@ Do not put Gmail OAuth secrets or the refresh token in Vercel or frontend code. 
 
 ## Create Gmail API credentials
 
-1. Open Google Cloud Console and select or create a project.
-2. Enable **Gmail API** for that project.
-3. Configure the OAuth consent screen. Add the Gmail account that will send PAYGO emails as a test user while the app is in Testing.
-4. Create an OAuth 2.0 Client ID with application type **Web application**.
-5. Add `https://developers.google.com/oauthplayground` as an authorized redirect URI for that OAuth client.
-6. Open Google OAuth 2.0 Playground: `https://developers.google.com/oauthplayground`.
-7. Open its settings (gear icon), enable **Use your own OAuth credentials**, and enter the OAuth client ID and secret.
-8. In Step 1, enter the scope `https://www.googleapis.com/auth/gmail.send`, authorize the Gmail account that PAYGO will send from, and grant access.
+PAYGO uses one Gmail account as its sender. Only that sender account needs to authorize the application; recipients can use Gmail, Yahoo, Outlook, or another valid email provider.
+
+1. Open Google Cloud Console and create a **new project using Personal mode**: [Google Auth Platform setup](https://console.cloud.google.com/auth/overview).
+2. Personal mode is intended for an app used only by its creator's Google account. That account will be the PAYGO sender. Google says Personal mode does not require OAuth app verification and is not subject to the seven-day test-token expiration. It is a one-time project choice and cannot later be changed to External or Internal.
+3. Enable **Gmail API** for the project.
+4. Create an OAuth 2.0 client ID. Use a Web application client if prompted.
+5. Add `https://developers.google.com/oauthplayground` as an authorized redirect URI for that client.
+6. Open [Google OAuth 2.0 Playground](https://developers.google.com/oauthplayground).
+7. Open its settings (gear icon), enable **Use your own OAuth credentials**, and enter this project's OAuth client ID and secret.
+8. In Step 1, enter the scope `https://www.googleapis.com/auth/gmail.send`, authorize using the Gmail account that will send PAYGO emails, and grant access.
 9. In Step 2, exchange the authorization code. Copy the **refresh token** from the response.
 10. Add the four `GMAIL_*` values to Render. Keep the refresh token private.
 
-Google's OAuth consent-screen **Testing** status can cause refresh tokens to expire after seven days for external apps. This is suitable for an initial test, but not a set-and-forget production configuration. For ongoing use, review Google's publishing and sensitive-scope verification requirements for the Gmail send scope.
+If Personal mode is unavailable and you instead use an External project in Testing status, Google expires authorizations and refresh tokens after seven days for scopes such as `gmail.send`; you would need to re-authorize periodically. The Gmail send scope is sensitive. Review Google's [scope classification](https://developers.google.com/workspace/gmail/api/auth/scopes) and [OAuth verification guidance](https://support.google.com/cloud/answer/13463073) before making the integration broadly available.
 
 ## Frontend (Vercel)
 
 - `NEXT_PUBLIC_GOOGLE_CLIENT_ID`: use the exact same Google OAuth Web client ID as the backend's `GOOGLE_CLIENT_ID` for Google sign-in.
 
-In Google Cloud Console, configure the OAuth consent screen and add the deployed frontend hostname under **Authorized JavaScript origins** for the Google sign-in client.
+In Google Cloud Console, configure the OAuth consent screen and add the deployed frontend hostname under **Authorized JavaScript origins** for the Google sign-in client. Gmail API credentials are separate and must never be exposed to the frontend.
 
 ## Behaviour after deployment
 
