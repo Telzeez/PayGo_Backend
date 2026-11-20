@@ -169,6 +169,7 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT c.id, c.source_id AS "sourceId", s.name AS "sourceName",
+              s.owner_id AS "sourceOwnerId",
               c.customer_id AS "customerId", c.receiving_device_id AS "receivingDeviceId",
               c.status, c.requested_power_w AS "requestedPowerW",
               c.requested_apparent_va AS "requestedApparentVa",
