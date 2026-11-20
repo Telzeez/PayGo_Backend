@@ -1,5 +1,7 @@
 name: Auth migration build
 on:
+  push:
+    branches: [feature/firebase-auth-migration]
   pull_request:
     branches: [main]
   workflow_dispatch:
