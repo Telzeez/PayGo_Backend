@@ -309,19 +309,6 @@ export class MarketplaceService {
     try {
       await client.query('BEGIN');
 
-      // Checkout is permanently bound to a meter owned by the buyer.
-      const buyerDevice = await client.query(
-        `SELECT 1 FROM devices d
-         WHERE d.device_id = $1 AND d.owner_id = $2
-           AND d.assignment_status = 'ACTIVATED'
-           AND d.meter_purpose = 'RECEIVING'
-         FOR UPDATE`,
-        [buyerDeviceId, buyerId]
-      );
-      if (!buyerDevice.rows.length) {
-        throw new Error('Select a meter assigned to your account before checkout');
-      }
-
       // Lock listing row for update to prevent concurrent overselling
       const listingRes = await client.query(
         `SELECT l.id, l.seller_id, l.energy_source_id, l.available_kwh, l.reserved_kwh, l.price_per_kwh, l.status,
@@ -346,18 +333,24 @@ export class MarketplaceService {
         throw new Error('Sellers cannot purchase from their own energy listing');
       }
 
-      // Checkout is allowed only after the prosumer has approved this
-      // customer's appliance load and the dedicated receiving meter is linked.
+      // The receiving meter remains owned by the prosumer. The buyer is
+      // authorised through the approved connection, not through device ownership.
       const approvedConnection = await client.query(
-        `SELECT id FROM customer_connections
-         WHERE source_id = $1 AND customer_id = $2
-           AND receiving_device_id = $3 AND status IN ('APPROVED', 'PENDING_REVISION')
-           AND approved_power_w IS NOT NULL
-         FOR UPDATE`,
-        [listing.energy_source_id, buyerId, buyerDeviceId]
+        `SELECT c.id
+         FROM customer_connections c
+         JOIN devices d ON d.device_id = c.receiving_device_id
+         WHERE c.source_id = $1 AND c.customer_id = $2
+           AND c.receiving_device_id = $3
+           AND c.status IN ('APPROVED', 'PENDING_REVISION')
+           AND c.approved_power_w IS NOT NULL
+           AND d.owner_id = $4
+           AND d.meter_purpose = 'RECEIVING'
+           AND d.assignment_status = 'ACTIVATED'
+         FOR UPDATE OF c, d`,
+        [listing.energy_source_id, buyerId, buyerDeviceId, listing.seller_id]
       );
       if (!approvedConnection.rows.length) {
-        throw new Error('A prosumer-approved connection and activated receiving meter are required before checkout.');
+        throw new Error('A prosumer-approved connection with a receiving meter assigned by that prosumer is required before checkout.');
       }
 
       const availableKwh = parseFloat(listing.available_kwh);

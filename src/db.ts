@@ -26,7 +26,9 @@ const pool = new Pool({
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
-    ssl: isLocal ? undefined : { rejectUnauthorized: false }
+    // Validate remote PostgreSQL certificates against Node.js trusted certificate authorities.
+    // Never bypass TLS certificate verification for production database connections.
+    ssl: isLocal ? undefined : { rejectUnauthorized: true }
 });
 
 pool.on('connect', () => {
