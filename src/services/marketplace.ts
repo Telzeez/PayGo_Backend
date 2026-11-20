@@ -351,7 +351,7 @@ export class MarketplaceService {
       const approvedConnection = await client.query(
         `SELECT id FROM customer_connections
          WHERE source_id = $1 AND customer_id = $2
-           AND receiving_device_id = $3 AND status = 'APPROVED'
+           AND receiving_device_id = $3 AND status IN ('APPROVED', 'PENDING_REVISION')
            AND approved_power_w IS NOT NULL
          FOR UPDATE`,
         [listing.energy_source_id, buyerId, buyerDeviceId]
