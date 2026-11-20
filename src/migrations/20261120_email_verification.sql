@@ -11,3 +11,10 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_email_verification_user ON email_verification_tokens(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_email_verification_expiry ON email_verification_tokens(expires_at) WHERE used_at IS NULL;
+
+-- Keep meter reset audit history while allowing account deletion.
+ALTER TABLE device_balance_resets ALTER COLUMN owner_id DROP NOT NULL;
+ALTER TABLE device_balance_resets DROP CONSTRAINT IF EXISTS device_balance_resets_owner_id_fkey;
+ALTER TABLE device_balance_resets
+  ADD CONSTRAINT device_balance_resets_owner_id_fkey
+  FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL;
