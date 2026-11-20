@@ -20,3 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_device_activation_owner
   ON device_activation_codes(owner_id, device_id);
 CREATE INDEX IF NOT EXISTS idx_device_activation_expiry
   ON device_activation_codes(expires_at);
+
+-- A physical generation meter can be linked to only one energy source.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_energy_sources_device_active
+  ON energy_sources(device_id) WHERE status <> 'DECOMMISSIONED';
