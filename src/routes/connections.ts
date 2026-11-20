@@ -99,15 +99,14 @@ router.put('/sources/:sourceId/capacity', async (req: AuthenticatedRequest, res:
 router.post('/connections', async (req: AuthenticatedRequest, res: Response) => {
   const customerId = req.user!.userId;
   const sourceId = Number(req.body?.sourceId);
-  const receivingDeviceId = String(req.body?.receivingDeviceId || '').trim();
   let selections: ApplianceSelection[];
   try {
     selections = parseSelections(req.body?.appliances);
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });
   }
-  if (!Number.isInteger(sourceId) || sourceId <= 0 || !receivingDeviceId) {
-    return res.status(400).json({ success: false, error: 'A valid sourceId and your assigned receivingDeviceId are required.' });
+  if (!Number.isInteger(sourceId) || sourceId <= 0) {
+    return res.status(400).json({ success: false, error: 'A valid sourceId is required.' });
   }
 
   const client = await pool.connect();
@@ -131,29 +130,18 @@ router.post('/connections', async (req: AuthenticatedRequest, res: Response) => 
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, code: 'SOURCE_CAPACITY_NOT_CONFIGURED', error: 'The energy source owner must configure its electrical capacity before connection requests can be assessed.' });
     }
-    const device = await client.query(
-      `SELECT device_id FROM devices
-       WHERE device_id = $1 AND owner_id = $2
-         AND assignment_status = 'ACTIVATED' AND meter_purpose = 'RECEIVING'
-       FOR UPDATE`,
-      [receivingDeviceId, customerId]
-    );
-    if (!device.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ success: false, code: 'RECEIVING_METER_REQUIRED', error: 'You need an activated receiving meter assigned to your account before requesting a connection.' });
-    }
     const catalogue = await loadCatalogueSelections(selections);
     const assessment = calculateLoadAssessment(selections, catalogue, Number(source.safety_margin_pct));
     const request = await client.query(
       `INSERT INTO customer_connections
-       (source_id, customer_id, receiving_device_id, requested_power_w,
+       (source_id, customer_id, requested_power_w,
         requested_apparent_va, requested_starting_surge_va, safety_margin_pct)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, status, requested_power_w AS "requestedPowerW",
          requested_apparent_va AS "requestedApparentVa",
          requested_starting_surge_va AS "requestedStartingSurgeVa",
          safety_margin_pct AS "safetyMarginPct", requested_at AS "requestedAt"`,
-      [sourceId, customerId, receivingDeviceId, assessment.requestedPowerW,
+      [sourceId, customerId, assessment.requestedPowerW,
        assessment.requestedApparentVa, assessment.requestedStartingSurgeVa, Number(source.safety_margin_pct)]
     );
     const connectionId = request.rows[0].id;
