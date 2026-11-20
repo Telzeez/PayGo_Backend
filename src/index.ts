@@ -22,12 +22,18 @@ const initDb = async () => {
     if (sqlPath) {
       await pool.query(fs.readFileSync(sqlPath, 'utf8'));
       console.log(`Database tables initialized successfully from ${sqlPath}`);
-      const migrationFiles = ['20261119_multi_device_metering.sql', '20261120_email_verification.sql', '20261121_device_provisioning.sql', '20261122_firebase_identity.sql'];
+      // Apply Firebase identity before provisioning constraints so legacy
+      // duplicate meter rows cannot block authentication schema setup.
+      const migrationFiles = ['20261119_multi_device_metering.sql', '20261120_email_verification.sql', '20261122_firebase_identity.sql', '20261121_device_provisioning.sql'];
       for (const migrationFile of migrationFiles) {
         const migrationPath = path.join(path.dirname(sqlPath), 'migrations', migrationFile);
-        if (fs.existsSync(migrationPath)) {
+        if (!fs.existsSync(migrationPath)) continue;
+        try {
           await pool.query(fs.readFileSync(migrationPath, 'utf8'));
           console.log(`PAYGO migration applied: ${migrationFile}`);
+        } catch (migrationError) {
+          console.error(`PAYGO migration failed: ${migrationFile}`, migrationError);
+          // Keep independent migrations running; resolve failed constraints separately.
         }
       }
     } else {
