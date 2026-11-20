@@ -22,12 +22,9 @@ app.use(express.json({
 app.use(express.static('dist'));
 app.use(requestLogger);
 
-// PAYGO temporary lockdown:
-// Access is disabled by default until the Firebase authentication migration is
-// complete. Set PAYGO_MAINTENANCE_MODE=false to restore normal API access.
-// Keep the verified Paystack webhook available so already-initiated payments
-// can still be reconciled while customer access is paused.
-const maintenanceMode = process.env.PAYGO_MAINTENANCE_MODE !== 'false';
+// Maintenance mode is opt-in. Normal API access remains enabled unless
+// PAYGO_MAINTENANCE_MODE=true is explicitly configured.
+const maintenanceMode = process.env.PAYGO_MAINTENANCE_MODE === 'true';
 app.use('/api', (req: Request, res: Response, next) => {
   if (!maintenanceMode || req.path === '/webhook/paystack') {
     return next();
