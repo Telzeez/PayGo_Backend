@@ -1,4 +1,5 @@
 import express, { Response } from 'express';
+import pool from '../db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
 import { MarketplaceService } from '../services/marketplace.js';
 
