@@ -154,7 +154,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const ownerId = req.user!.userId;
     const result = await pool.query(
       `SELECT DISTINCT d.device_id AS "deviceId", d.current_balance AS balance,
-              d.status, d.assignment_status AS "assignmentStatus",
+              d.status, d.assignment_status AS "assignmentStatus", d.meter_purpose AS "meterPurpose",
               d.last_seen_at AS "lastSeenAt", d.last_updated AS "lastUpdated"
        FROM devices d
        WHERE d.owner_id = $1
