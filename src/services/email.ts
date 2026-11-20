@@ -66,7 +66,7 @@ export const sendEmail = async ({ to, subject, html }: EmailMessage): Promise<vo
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
-    Buffer.from(html, 'utf8').toString('base64').replace(/.{1,76}/g, 'Buffer.from(html, 'utf8').toString('base64'),\r\n').trim(),
+    (Buffer.from(html, 'utf8').toString('base64').match(/.{1,76}/g) || []).join('\\r\\n'),
   ].join('\r\n');
   const raw = Buffer.from(mimeMessage, 'utf8').toString('base64url');
 
