@@ -21,8 +21,3 @@ CREATE INDEX IF NOT EXISTS idx_device_claim_tokens_device
   ON device_claim_tokens(device_id, expires_at)
   WHERE claimed_at IS NULL;
 
--- A receiving meter can be linked to only one live customer connection.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_receiving_meter_active_connection
-  ON customer_connections(receiving_device_id)
-  WHERE receiving_device_id IS NOT NULL
-    AND status IN ('APPROVED', 'PENDING_REVISION');
