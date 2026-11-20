@@ -37,8 +37,9 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
     if (meterPurpose === 'RECEIVING') {
       const approvedConnection = await client.query(
         `SELECT id FROM customer_connections
-         WHERE id = $1 AND customer_id = $2 AND status = 'APPROVED'
-           AND receiving_device_id IS NULL
+         WHERE id = $1 AND customer_id = $2
+           AND status IN ('APPROVED', 'PENDING_REVISION')
+           AND approved_power_w IS NOT NULL AND receiving_device_id IS NULL
          FOR UPDATE`,
         [connectionId, ownerId]
       );
@@ -74,8 +75,9 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
     if (meterPurpose === 'RECEIVING') {
       const linked = await client.query(
         `UPDATE customer_connections SET receiving_device_id = $2, updated_at = NOW()
-         WHERE id = $1 AND customer_id = $3 AND status = 'APPROVED'
-           AND receiving_device_id IS NULL`,
+         WHERE id = $1 AND customer_id = $3
+           AND status IN ('APPROVED', 'PENDING_REVISION')
+           AND approved_power_w IS NOT NULL AND receiving_device_id IS NULL`,
         [connectionId, deviceId, ownerId]
       );
       if (linked.rowCount !== 1) {
