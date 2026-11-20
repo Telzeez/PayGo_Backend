@@ -68,7 +68,9 @@ CREATE TABLE IF NOT EXISTS customer_connections (
   CHECK (
     (approved_power_w IS NULL AND approved_apparent_va IS NULL AND approved_starting_surge_va IS NULL)
     OR
-    (approved_power_w > 0 AND approved_apparent_va > 0 AND approved_starting_surge_va > 0)
+    (approved_power_w IS NOT NULL AND approved_power_w > 0
+     AND approved_apparent_va IS NOT NULL AND approved_apparent_va > 0
+     AND approved_starting_surge_va IS NOT NULL AND approved_starting_surge_va > 0)
   )
 );
 
