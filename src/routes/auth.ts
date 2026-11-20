@@ -6,6 +6,7 @@ import { RegisterRequest, LoginRequest, JwtPayload } from '../types/index.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
+import { sendVerificationEmail } from '../services/email.js';
 const router = express.Router();
 
 const BCRYPT_SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
@@ -17,23 +18,6 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 const createSession = (user: any) => {
   const tokenPayload: JwtPayload = { userId: user.id, email: user.email, role: user.role, isBuyer: user.is_buyer, isSeller: user.is_seller };
   return jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
-};
-
-const sendVerificationEmail = async (email: string, rawToken: string) => {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.EMAIL_FROM;
-  const appUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'https://pay-go-frontend.vercel.app').replace(/\/+$/, '');
-  if (!apiKey || !from) throw new Error('Email delivery is not configured. Set RESEND_API_KEY and EMAIL_FROM.');
-  const verifyUrl = `${appUrl}/verify-email?token=${encodeURIComponent(rawToken)}`;
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from, to: [email], subject: 'Verify your PAYGO email address',
-      html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#18181b"><h2>Verify your PAYGO email</h2><p>Confirm this email address to activate your PAYGO account.</p><p><a href="${verifyUrl}" style="display:inline-block;padding:12px 20px;background:#f59e0b;color:#18181b;text-decoration:none;border-radius:8px;font-weight:bold">Verify email</a></p><p>This link expires in 30 minutes. If you did not create this account, ignore this message.</p></div>`
-    })
-  });
-  if (!response.ok) throw new Error(`Email provider rejected the message: ${(await response.text()).slice(0, 300)}`);
 };
 
 // ==========================================
