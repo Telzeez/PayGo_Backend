@@ -98,7 +98,7 @@ router.post('/:deviceId/assign', async (req: AuthenticatedRequest, res: Response
   try {
     await client.query('BEGIN');
     const connection = await client.query(
-      `SELECT c.id, c.customer_id, c.status, c.approved_power_w, s.owner_id
+      `SELECT c.id, c.customer_id, c.status, c.approved_power_w, c.receiving_device_id, s.owner_id
        FROM customer_connections c
        JOIN energy_sources s ON s.id = c.source_id
        WHERE c.id = $1
