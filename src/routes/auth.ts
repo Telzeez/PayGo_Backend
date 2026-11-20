@@ -14,6 +14,28 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '72h';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
+const createSession = (user: any) => {
+  const tokenPayload: JwtPayload = { userId: user.id, email: user.email, role: user.role, isBuyer: user.is_buyer, isSeller: user.is_seller };
+  return jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
+};
+
+const sendVerificationEmail = async (email: string, rawToken: string) => {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM;
+  const appUrl = (process.env.APP_BASE_URL || 'http://localhost:3000').replace(/\\/$/, '');
+  if (!apiKey || !from) throw new Error('Email delivery is not configured. Set RESEND_API_KEY and EMAIL_FROM.');
+  const verifyUrl = `${appUrl}/verify-email?token=${encodeURIComponent(rawToken)}`;
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from, to: [email], subject: 'Verify your PAYGO email address',
+      html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#18181b"><h2>Verify your PAYGO email</h2><p>Confirm this email address to activate your PAYGO account.</p><p><a href="${verifyUrl}" style="display:inline-block;padding:12px 20px;background:#f59e0b;color:#18181b;text-decoration:none;border-radius:8px;font-weight:bold">Verify email</a></p><p>This link expires in 30 minutes. If you did not create this account, ignore this message.</p></div>`
+    })
+  });
+  if (!response.ok) throw new Error(`Email provider rejected the message: ${(await response.text()).slice(0, 300)}`);
+};
+
 // ==========================================
 // 1. REGISTER NEW USER (BUYER OR OWNER)
 // ==========================================
@@ -70,29 +92,16 @@ router.post('/register', async (req: Request, res: Response) => {
     );
 
     const newUser = insertResult.rows[0];
-
-    const tokenPayload: JwtPayload = {
-      userId: newUser.id,
-      email: newUser.email,
-      role: newUser.role,
-      isBuyer: newUser.is_buyer,
-      isSeller: newUser.is_seller,
-    };
-
-    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
-
-    return res.status(201).json({
-      success: true,
-      token,
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        phone: newUser.phone,
-        role: newUser.role,
-        isBuyer: newUser.is_buyer,
-        isSeller: newUser.is_seller,
-      },
-    });
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await pool.query(`INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 minutes')`, [newUser.id, tokenHash]);
+    try {
+      await sendVerificationEmail(newUser.email, rawToken);
+    } catch (emailError) {
+      console.error('Verification email delivery failed:', emailError);
+      return res.status(503).json({ success: false, code: 'VERIFICATION_EMAIL_UNAVAILABLE', error: 'Your account is pending verification, but the verification email could not be sent. Configure email delivery and request a new link.' });
+    }
+    return res.status(201).json({ success: true, requiresEmailVerification: true, message: 'Account created. Check your email for a verification link before signing in.', email: newUser.email });
 
   } catch (error) {
     console.error('Registration failure:', error);
@@ -121,7 +130,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     // Query user by email
     const result = await pool.query(
-      'SELECT id, email, phone, password_hash, role, is_buyer, is_seller FROM users WHERE email = $1',
+      'SELECT id, email, phone, password_hash, role, is_buyer, is_seller, email_verified FROM users WHERE email = $1',
       [normalizedEmail]
     );
 
@@ -133,8 +142,8 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     const user = result.rows[0];
-
-    // Verify password
+    if (!user.email_verified) return res.status(403).json({ success: false, code: 'EMAIL_NOT_VERIFIED', error: 'Please verify your email address before signing in.' });
+    if (!user.password_hash) return res.status(401).json({ success: false, error: 'This account uses Google sign-in. Continue with Google.' });
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       return res.status(401).json({
@@ -182,81 +191,41 @@ router.post('/login', async (req: Request, res: Response) => {
 router.post('/google', async (req: Request, res: Response) => {
   try {
     const { token, role = 'BUYER' } = req.body;
-    
-    if (!token) {
-      return res.status(400).json({ success: false, error: 'Token is required' });
-    }
+    if (!GOOGLE_CLIENT_ID) return res.status(503).json({ success: false, error: 'Google sign-in is not configured on the server.' });
+    if (!token) return res.status(400).json({ success: false, error: 'Google credential is required.' });
+    if (role !== 'BUYER' && role !== 'OWNER') return res.status(400).json({ success: false, error: 'Account type must be BUYER or OWNER.' });
 
-    const ticket = await googleClient.verifyIdToken({
-      idToken: token,
-      audience: GOOGLE_CLIENT_ID,
-    });
-    
+    const ticket = await googleClient.verifyIdToken({ idToken: token, audience: GOOGLE_CLIENT_ID });
     const payload = ticket.getPayload();
-    if (!payload || !payload.email) {
-      return res.status(400).json({ success: false, error: 'Invalid Google token payload' });
-    }
-    
+    if (!payload?.email || payload.email_verified !== true) return res.status(401).json({ success: false, error: 'Google did not provide a verified email address.' });
     const normalizedEmail = payload.email.trim().toLowerCase();
-    
-    // Check if user exists
-    let result = await pool.query(
-      'SELECT id, email, phone, role, is_buyer, is_seller FROM users WHERE email = $1',
-      [normalizedEmail]
-    );
-    
-    if (result.rows.length === 0) {
-      // User does not exist. Tell frontend to prompt for remaining fields.
-      const registrationToken = jwt.sign(
-        { email: normalizedEmail, isRegistration: true },
-        JWT_SECRET,
-        { expiresIn: '15m' } as any
-      );
-      
-      return res.json({
-        success: true,
-        needsRegistration: true,
-        registrationToken
-      });
-    }
-    
-    const user = result.rows[0];
-    
-    const tokenPayload: JwtPayload = {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      isBuyer: user.is_buyer,
-      isSeller: user.is_seller,
-    };
-    
-    const jwtToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN as any });
-    
-    return res.json({
-      success: true,
-      token: jwtToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        isBuyer: user.is_buyer,
-        isSeller: user.is_seller,
-      },
-    });
+    const result = await pool.query('SELECT id, email, phone, role, is_buyer, is_seller, email_verified FROM users WHERE email = $1', [normalizedEmail]);
+    let user = result.rows[0];
 
+    if (!user) {
+      const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
+      const inserted = await pool.query(
+        `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller, email_verified)
+         VALUES ($1, NULL, NULL, $2, TRUE, $3, TRUE)
+         RETURNING id, email, phone, role, is_buyer, is_seller, email_verified`,
+        [normalizedEmail, assignedRole, role === 'OWNER']
+      );
+      user = inserted.rows[0];
+    } else if (!user.email_verified) {
+      const verified = await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1 RETURNING id, email, phone, role, is_buyer, is_seller, email_verified', [user.id]);
+      user = verified.rows[0];
+    }
+
+    return res.json({
+      success: true, token: createSession(user),
+      user: { id: user.id, email: user.email, phone: user.phone, role: user.role, isBuyer: user.is_buyer, isSeller: user.is_seller }
+    });
   } catch (error) {
     console.error('Google Auth failure:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error during Google authentication',
-    });
+    return res.status(401).json({ success: false, error: 'Google authentication failed. Check the OAuth client configuration and try again.' });
   }
 });
 
-// ==========================================
-// 2.6 GOOGLE REGISTER (COMPLETE SIGN UP)
-// ==========================================
 router.post('/register-google', async (req: Request, res: Response) => {
   try {
     const { registrationToken, phone, role } = req.body;
