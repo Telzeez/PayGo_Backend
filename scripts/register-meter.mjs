@@ -3,11 +3,11 @@ import crypto from 'node:crypto';
 import { Pool } from 'pg';
 
 const deviceId = String(process.argv[2] || '').trim();
-const purpose = String(process.argv[3] || 'RECEIVING').toUpperCase();
+const purpose = String(process.argv[3] || '').trim().toUpperCase();
 
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) ||
     !['GENERATION', 'RECEIVING'].includes(purpose)) {
-  console.error('Usage: node scripts/register-meter.mjs <DEVICE_ID> [GENERATION|RECEIVING]');
+  console.error('Usage: node scripts/register-meter.mjs <DEVICE_ID> <GENERATION|RECEIVING>');
   process.exit(1);
 }
 if (!process.env.DATABASE_URL) {
@@ -33,14 +33,23 @@ try {
     [deviceId, purpose]
   );
   const existing = await client.query(
-    `SELECT owner_id, assignment_status FROM devices
+    `SELECT owner_id, assignment_status, meter_purpose FROM devices
      WHERE device_id = $1 FOR UPDATE`,
     [deviceId]
   );
-  if (!existing.rows.length || existing.rows[0].owner_id !== null ||
+  if (!existing.rows.length) {
+    throw new Error('Meter registration failed: device was not found after insert.');
+  }
+  if (existing.rows[0].meter_purpose !== purpose) {
+    throw new Error(
+      `Meter ${deviceId} is already registered as ${existing.rows[0].meter_purpose}; refusing to issue a ${purpose} claim code.`
+    );
+  }
+  if (existing.rows[0].owner_id !== null ||
       existing.rows[0].assignment_status !== 'UNASSIGNED') {
     throw new Error('This device is already claimed or assigned; refusing to issue another claim credential.');
   }
+
   // Rotate any previous unused code so only the newly printed code can claim this meter.
   await client.query(
     `UPDATE device_claim_tokens SET claimed_at = NOW()
