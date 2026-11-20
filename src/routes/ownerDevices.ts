@@ -130,6 +130,11 @@ router.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
       `UPDATE devices SET assignment_status = 'ACTIVATED' WHERE device_id = $1 AND owner_id = $2`,
       [deviceId, ownerId]
     );
+    // Activation unlocks the seller capability without creating a second account.
+    await client.query(
+      `UPDATE users SET is_seller = TRUE, role = 'OWNER', updated_at = NOW() WHERE id = $1`,
+      [ownerId]
+    );
     await client.query('COMMIT');
     return res.json({ success: true, deviceId, message: 'Your PAYGO meter is now activated.' });
   } catch (error: any) {
