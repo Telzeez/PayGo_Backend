@@ -22,7 +22,7 @@ const createSession = (user: any) => {
 const sendVerificationEmail = async (email: string, rawToken: string) => {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM;
-  const appUrl = (process.env.APP_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  const appUrl = (process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'https://pay-go-frontend.vercel.app').replace(/\/+$/, '');
   if (!apiKey || !from) throw new Error('Email delivery is not configured. Set RESEND_API_KEY and EMAIL_FROM.');
   const verifyUrl = `${appUrl}/verify-email?token=${encodeURIComponent(rawToken)}`;
   const response = await fetch('https://api.resend.com/emails', {
@@ -109,6 +109,94 @@ router.post('/register', async (req: Request, res: Response) => {
       success: false,
       error: 'Internal server error during registration',
     });
+  }
+});
+
+// Verify an email address using the single-use token from the email.
+router.post('/verify-email', async (req: Request, res: Response) => {
+  const rawToken = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  if (!rawToken) return res.status(400).json({ success: false, error: 'Verification token is required.' });
+
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT t.id AS token_id, u.id, u.email, u.phone, u.role, u.is_buyer, u.is_seller
+       FROM email_verification_tokens t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > NOW()
+       FOR UPDATE OF t, u`,
+      [tokenHash]
+    );
+
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, error: 'This verification link is invalid, expired, or has already been used. Request a new link.' });
+    }
+
+    const user = result.rows[0];
+    await client.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [user.id]);
+    await client.query('UPDATE email_verification_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL', [user.id]);
+    await client.query('COMMIT');
+
+    return res.json({
+      success: true,
+      message: 'Email verified successfully.',
+      token: createSession(user),
+      user: { id: user.id, email: user.email, phone: user.phone, role: user.role, isBuyer: user.is_buyer, isSeller: user.is_seller },
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    console.error('Email verification failure:', error);
+    return res.status(500).json({ success: false, error: 'Unable to verify your email right now. Please try again.' });
+  } finally {
+    client.release();
+  }
+});
+
+// Resend verification without revealing whether an email address has an account.
+router.post('/resend-verification', async (req: Request, res: Response) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ success: false, error: 'Enter a valid email address.' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT id, email, email_verified FROM users WHERE email = $1',
+      [email]
+    );
+    const user = result.rows[0];
+    if (user && !user.email_verified) {
+      const recent = await pool.query(
+        `SELECT 1 FROM email_verification_tokens
+         WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+         LIMIT 1`,
+        [user.id]
+      );
+
+      if (recent.rows.length === 0) {
+        const rawToken = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        await pool.query(
+          'INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'30 minutes\')',
+          [user.id, tokenHash]
+        );
+        try {
+          await sendVerificationEmail(user.email, rawToken);
+        } catch (emailError) {
+          await pool.query('DELETE FROM email_verification_tokens WHERE token_hash = $1', [tokenHash]);
+          console.error('Verification resend delivery failed:', emailError);
+          return res.status(503).json({ success: false, error: 'Email delivery is temporarily unavailable. Please try again later.' });
+        }
+      }
+    }
+
+    return res.json({ success: true, message: 'If this address belongs to an unverified PAYGO account, a verification link has been sent. Check your inbox and spam folder.' });
+  } catch (error) {
+    console.error('Verification resend failure:', error);
+    return res.status(500).json({ success: false, error: 'Unable to request a verification email right now.' });
   }
 });
 
