@@ -46,6 +46,19 @@ router.post('/sync', verifyFirebaseIdentity, async (req: AuthenticatedRequest, r
       [identity.sub]
     );
 
+    if (result.rows.length === 1) {
+      result = await client.query(
+        `UPDATE users
+         SET email = $1,
+             email_verified = TRUE,
+             phone = COALESCE(phone, $2),
+             updated_at = NOW()
+         WHERE firebase_uid = $3
+         RETURNING id, email, phone, role, is_buyer, is_seller, created_at`,
+        [email, phone, identity.sub]
+      );
+    }
+
     if (result.rows.length === 0) {
       result = await client.query(
         `SELECT id, email, phone, role, is_buyer, is_seller, firebase_uid, created_at
