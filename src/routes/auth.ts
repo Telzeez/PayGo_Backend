@@ -190,45 +190,65 @@ router.post('/login', async (req: Request, res: Response) => {
 // ==========================================
 router.post('/google', async (req: Request, res: Response) => {
   try {
-    const { token, role = 'BUYER' } = req.body;
-    if (!GOOGLE_CLIENT_ID) return res.status(503).json({ success: false, error: 'Google sign-in is not configured on the server.' });
+    const { token } = req.body as { token?: string };
+    if (!GOOGLE_CLIENT_ID) {
+      console.error('Google sign-in unavailable: GOOGLE_CLIENT_ID is not configured.');
+      return res.status(503).json({ success: false, error: 'Google sign-in is not configured on the server.' });
+    }
     if (!token) return res.status(400).json({ success: false, error: 'Google credential is required.' });
-    if (role !== 'BUYER' && role !== 'OWNER') return res.status(400).json({ success: false, error: 'Account type must be BUYER or OWNER.' });
 
-    const ticket = await googleClient.verifyIdToken({ idToken: token, audience: GOOGLE_CLIENT_ID });
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: GOOGLE_CLIENT_ID,
+    });
     const payload = ticket.getPayload();
-    if (!payload?.email || payload.email_verified !== true) return res.status(401).json({ success: false, error: 'Google did not provide a verified email address.' });
-    const normalizedEmail = payload.email.trim().toLowerCase();
-    const result = await pool.query('SELECT id, email, phone, role, is_buyer, is_seller, email_verified FROM users WHERE email = $1', [normalizedEmail]);
-    let user = result.rows[0];
-
-    if (!user) {
-      const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
-      const inserted = await pool.query(
-        `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller, email_verified)
-         VALUES ($1, NULL, NULL, $2, TRUE, $3, TRUE)
-         RETURNING id, email, phone, role, is_buyer, is_seller, email_verified`,
-        [normalizedEmail, assignedRole, role === 'OWNER']
-      );
-      user = inserted.rows[0];
-    } else if (!user.email_verified) {
-      const verified = await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1 RETURNING id, email, phone, role, is_buyer, is_seller, email_verified', [user.id]);
-      user = verified.rows[0];
+    if (!payload?.email || payload.email_verified !== true) {
+      return res.status(401).json({ success: false, error: 'Google did not provide a verified email address.' });
     }
 
+    const normalizedEmail = payload.email.trim().toLowerCase();
+    const result = await pool.query(
+      'SELECT id, email, phone, role, is_buyer, is_seller, email_verified FROM users WHERE email = $1',
+      [normalizedEmail]
+    );
+
+    if (result.rows.length === 0) {
+      const registrationToken = jwt.sign(
+        { email: normalizedEmail, isRegistration: true },
+        JWT_SECRET,
+        { expiresIn: '15m' } as any
+      );
+      return res.json({ success: true, needsRegistration: true, registrationToken });
+    }
+
+    const user = result.rows[0];
+    if (!user.email_verified) {
+      await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [user.id]);
+    }
     return res.json({
-      success: true, token: createSession(user),
-      user: { id: user.id, email: user.email, phone: user.phone, role: user.role, isBuyer: user.is_buyer, isSeller: user.is_seller }
+      success: true,
+      token: createSession(user),
+      user: {
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        isBuyer: user.is_buyer,
+        isSeller: user.is_seller,
+      },
     });
   } catch (error) {
     console.error('Google Auth failure:', error);
-    return res.status(401).json({ success: false, error: 'Google authentication failed. Check the OAuth client configuration and try again.' });
+    return res.status(401).json({
+      success: false,
+      error: 'Google authentication failed. Check that the frontend and backend use the same Google OAuth client ID.',
+    });
   }
 });
 
 router.post('/register-google', async (req: Request, res: Response) => {
   try {
-    const { registrationToken, phone, role } = req.body;
+    const { registrationToken, phone } = req.body;
 
     if (!registrationToken) {
       return res.status(400).json({ success: false, error: 'Registration token is required' });
@@ -257,9 +277,11 @@ router.post('/register-google', async (req: Request, res: Response) => {
       return res.status(409).json({ success: false, error: 'User with this email already exists' });
     }
 
+    // New Google accounts start as buyers. Seller capability is granted only
+    // after a pre-provisioned GENERATION meter is activated.
     const isBuyer = true;
-    const isSeller = role === 'OWNER';
-    const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
+    const isSeller = false;
+    const assignedRole = 'USER';
 
     const insertResult = await pool.query(
       `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller, email_verified)
