@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS customer_connections (
   )
 );
 
+ALTER TABLE customer_connections ALTER COLUMN receiving_device_id DROP NOT NULL;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_connection_device_active
   ON customer_connections(receiving_device_id)
   WHERE receiving_device_id IS NOT NULL
