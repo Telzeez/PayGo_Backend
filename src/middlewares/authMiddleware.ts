@@ -1,7 +1,16 @@
 import { Request, Response, NextFunction } from 'express';
-import { createPublicKey, verify as verifySignature, type JsonWebKey } from 'node:crypto';
+import { createPublicKey, verify as verifySignature } from 'node:crypto';
 import pool from '../db.js';
 import { JwtPayload } from '../types/index.js';
+
+interface FirebaseJwk {
+  kid: string;
+  kty: string;
+  n: string;
+  e: string;
+  alg?: string;
+  use?: string;
+}
 
 interface FirebaseClaims {
   sub: string;
@@ -26,15 +35,15 @@ const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'paygo-697b9';
 const ISSUER = `https://securetoken.google.com/${PROJECT_ID}`;
 const JWKS_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
 
-let cachedKeys: JsonWebKey[] = [];
+let cachedKeys: FirebaseJwk[] = [];
 let keysExpireAt = 0;
 
-async function getFirebaseKeys(): Promise<JsonWebKey[]> {
+async function getFirebaseKeys(): Promise<FirebaseJwk[]> {
   if (cachedKeys.length && Date.now() < keysExpireAt) return cachedKeys;
 
   const response = await fetch(JWKS_URL);
   if (!response.ok) throw new Error('Unable to retrieve Firebase signing keys');
-  const payload = await response.json() as { keys?: JsonWebKey[] };
+  const payload = await response.json() as { keys?: FirebaseJwk[] };
   if (!Array.isArray(payload.keys) || payload.keys.length === 0) {
     throw new Error('Firebase signing keys response was empty');
   }
@@ -54,13 +63,13 @@ async function verifyFirebaseIdToken(token: string): Promise<FirebaseClaims> {
   if (header.alg !== 'RS256' || !header.kid) throw new Error('Unsupported Firebase token signing key');
 
   const keys = await getFirebaseKeys();
-  const jwk = keys.find((key) => (key as JsonWebKey & { kid?: string }).kid === header.kid);
+  const jwk = keys.find((key) => key.kid === header.kid);
   if (!jwk) {
     cachedKeys = [];
     throw new Error('Unknown Firebase token signing key');
   }
 
-  const publicKey = createPublicKey({ key: jwk, format: 'jwk' });
+  const publicKey = createPublicKey({ key: jwk as any, format: 'jwk' });
   const validSignature = verifySignature(
     'RSA-SHA256',
     Buffer.from(`${parts[0]}.${parts[1]}`),
@@ -77,6 +86,9 @@ async function verifyFirebaseIdToken(token: string): Promise<FirebaseClaims> {
     !claims.sub ||
     claims.sub.length > 128 ||
     !claims.email ||
+    typeof claims.auth_time !== 'number' ||
+    typeof claims.iat !== 'number' ||
+    typeof claims.exp !== 'number' ||
     claims.exp <= now ||
     claims.iat > now + 60 ||
     claims.auth_time > now + 60
