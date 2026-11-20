@@ -96,7 +96,7 @@ router.put('/sources/:sourceId/capacity', async (req: AuthenticatedRequest, res:
 });
 
 // Customer declares appliances and requests a connection to a listed source.
-router.post('/connections', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/requests', async (req: AuthenticatedRequest, res: Response) => {
   const customerId = req.user!.userId;
   const sourceId = Number(req.body?.sourceId);
   let selections: ApplianceSelection[];
@@ -165,7 +165,7 @@ router.post('/connections', async (req: AuthenticatedRequest, res: Response) => 
 });
 
 // Customer sees their requests; prosumer sees requests for a source they own.
-router.get('/connections/me', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT c.id, c.source_id AS "sourceId", s.name AS "sourceName",
@@ -207,7 +207,7 @@ router.get('/connections/me', async (req: AuthenticatedRequest, res: Response) =
   }
 });
 
-router.post('/connections/:id/decision', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:id/decision', async (req: AuthenticatedRequest, res: Response) => {
   const connectionId = Number(req.params.id);
   const decision = String(req.body?.decision || '').toUpperCase();
   const note = req.body?.note ? String(req.body.note).slice(0, 500) : null;
@@ -299,7 +299,7 @@ router.post('/connections/:id/decision', async (req: AuthenticatedRequest, res: 
 
 // Customers may revise appliance declarations. An increase is held for owner approval;
 // the existing approved allocation remains active until the revision is approved.
-router.put('/connections/:id/appliances', async (req: AuthenticatedRequest, res: Response) => {
+router.put('/:id/appliances', async (req: AuthenticatedRequest, res: Response) => {
   const connectionId = Number(req.params.id);
   let selections: ApplianceSelection[];
   try { selections = parseSelections(req.body?.appliances); }
