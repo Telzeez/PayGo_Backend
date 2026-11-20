@@ -30,9 +30,9 @@ const initDb = async () => {
         if (!fs.existsSync(migrationPath)) continue;
         try {
           await pool.query(fs.readFileSync(migrationPath, 'utf8'));
-          console.log(`PAYGO migration applied: ${migrationFile}`);
+          console.log('PAYGO migration applied: %s', migrationFile);
         } catch (migrationError) {
-          console.error(`PAYGO migration failed: ${migrationFile}`, migrationError);
+          console.error('PAYGO migration failed: %s', migrationFile, migrationError);
           // Keep independent migrations running; resolve failed constraints separately.
         }
       }
