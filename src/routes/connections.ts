@@ -189,7 +189,24 @@ router.get('/connections/me', async (req: AuthenticatedRequest, res: Response) =
               c.approved_apparent_va AS "approvedApparentVa",
               c.approved_starting_surge_va AS "approvedStartingSurgeVa",
               c.safety_margin_pct AS "safetyMarginPct", c.decision_note AS "decisionNote",
-              c.requested_at AS "requestedAt", c.decided_at AS "decidedAt"
+              c.requested_at AS "requestedAt", c.decided_at AS "decidedAt",
+              s.max_capacity_w AS "sourceCapacityW",
+              s.max_capacity_va AS "sourceCapacityVa",
+              s.max_surge_va AS "sourceSurgeCapacityVa",
+              COALESCE((
+                SELECT json_agg(json_build_object(
+                  'applianceId', ca.appliance_id,
+                  'name', ac.name,
+                  'category', ac.category,
+                  'quantity', ca.quantity,
+                  'simultaneousQuantity', ca.simultaneous_quantity,
+                  'ratedPowerW', COALESCE(ca.rated_power_override_w, ac.rated_power_w),
+                  'isEstimate', ac.is_estimate
+                ) ORDER BY ac.category, ac.name)
+                FROM customer_connection_appliances ca
+                JOIN appliance_catalogue ac ON ac.id = ca.appliance_id
+                WHERE ca.connection_id = c.id
+              ), '[]'::json) AS appliances
        FROM customer_connections c JOIN energy_sources s ON s.id = c.source_id
        WHERE c.customer_id = $1 OR s.owner_id = $1
        ORDER BY c.requested_at DESC`,
