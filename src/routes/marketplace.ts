@@ -1,8 +1,52 @@
 import express, { Response } from 'express';
+import pool from '../db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
 import { MarketplaceService } from '../services/marketplace.js';
 
 const router = express.Router();
+
+// ==========================================
+// BUYER LOCATION: save only after the buyer confirms GPS coordinates
+// ==========================================
+router.post('/location', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+    const latitude = Number(req.body?.latitude);
+    const longitude = Number(req.body?.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) ||
+        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ success: false, error: 'Valid latitude and longitude are required.' });
+    }
+    const result = await pool.query(
+      `INSERT INTO user_locations (user_id, latitude, longitude, location_source, updated_at)
+       VALUES ($1, $2, $3, 'GPS', NOW())
+       ON CONFLICT (user_id) DO UPDATE
+       SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
+           location_source = 'GPS', updated_at = NOW()
+       RETURNING latitude, longitude, updated_at AS "updatedAt"`,
+      [req.user.userId, latitude, longitude]
+    );
+    return res.json({ success: true, location: result.rows[0] });
+  } catch (error: any) {
+    console.error('Save buyer location error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to save your location.' });
+  }
+});
+
+router.get('/location/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+    const result = await pool.query(
+      `SELECT latitude, longitude, location_source AS "locationSource", updated_at AS "updatedAt"
+       FROM user_locations WHERE user_id = $1 LIMIT 1`,
+      [req.user.userId]
+    );
+    return res.json({ success: true, location: result.rows[0] || null });
+  } catch (error: any) {
+    console.error('Get buyer location error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to load your saved location.' });
+  }
+});
 
 // ==========================================
 // 1. REGISTER ENERGY SOURCE (SELLER)

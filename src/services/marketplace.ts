@@ -35,28 +35,23 @@ export class MarketplaceService {
       throw new Error(`Service radius must be between 1 and ${DEFAULT_PLATFORM_MAX_RADIUS_METERS} meters`);
     }
 
-    // A physical meter can belong to only one owner. Existing unassigned
-    // devices may be associated with this owner; already-owned devices cannot
-    // be silently claimed by another account.
-    const otherOwnerSource = await pool.query(
-      'SELECT 1 FROM energy_sources WHERE device_id = $1 AND owner_id <> $2 LIMIT 1',
-      [deviceId, ownerId]
-    );
-    if (otherOwnerSource.rows.length) {
-      throw new Error('This meter is already associated with another owner');
-    }
-
+    // Seller source registration is allowed only for a meter provisioned
+    // and activated by PAYGO. Never create or claim a device from this form.
     const deviceCheck = await pool.query(
-      `INSERT INTO devices (device_id, owner_id, current_balance, status)
-       VALUES ($1, $2, 0, 'OFFLINE')
-       ON CONFLICT (device_id)
-       DO UPDATE SET owner_id = COALESCE(devices.owner_id, EXCLUDED.owner_id)
-       WHERE devices.owner_id IS NULL OR devices.owner_id = EXCLUDED.owner_id
-       RETURNING id`,
+      `SELECT id FROM devices
+       WHERE device_id = $1 AND owner_id = $2 AND assignment_status = 'ACTIVATED' AND meter_purpose = 'GENERATION'
+       LIMIT 1`,
       [deviceId, ownerId]
     );
     if (!deviceCheck.rows.length) {
-      throw new Error('This meter is already assigned to another owner');
+      throw new Error('Activate the PAYGO meter assigned to your account before registering an energy source.');
+    }
+    const existingSource = await pool.query(
+      'SELECT 1 FROM energy_sources WHERE device_id = $1 LIMIT 1',
+      [deviceId]
+    );
+    if (existingSource.rows.length) {
+      throw new Error('This meter is already linked to an energy source.');
     }
 
     const result = await pool.query(
