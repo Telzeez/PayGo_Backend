@@ -22,7 +22,7 @@ const initDb = async () => {
     if (sqlPath) {
       await pool.query(fs.readFileSync(sqlPath, 'utf8'));
       console.log(`Database tables initialized successfully from ${sqlPath}`);
-      const migrationFiles = ['20261119_multi_device_metering.sql', '20261120_email_verification.sql'];
+      const migrationFiles = ['20261119_multi_device_metering.sql', '20261120_email_verification.sql', '20261121_device_provisioning.sql'];
       for (const migrationFile of migrationFiles) {
         const migrationPath = path.join(path.dirname(sqlPath), 'migrations', migrationFile);
         if (fs.existsSync(migrationPath)) {
