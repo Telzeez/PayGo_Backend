@@ -22,7 +22,7 @@ const createSession = (user: any) => {
 const sendVerificationEmail = async (email: string, rawToken: string) => {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM;
-  const appUrl = (process.env.APP_BASE_URL || 'http://localhost:3000').replace(/\\/$/, '');
+  const appUrl = (process.env.APP_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
   if (!apiKey || !from) throw new Error('Email delivery is not configured. Set RESEND_API_KEY and EMAIL_FROM.');
   const verifyUrl = `${appUrl}/verify-email?token=${encodeURIComponent(rawToken)}`;
   const response = await fetch('https://api.resend.com/emails', {
