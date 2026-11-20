@@ -98,6 +98,7 @@ router.post('/register', async (req: Request, res: Response) => {
     try {
       await sendVerificationEmail(newUser.email, rawToken);
     } catch (emailError) {
+      await pool.query('DELETE FROM email_verification_tokens WHERE token_hash = $1', [tokenHash]);
       console.error('Verification email delivery failed:', emailError);
       return res.status(503).json({ success: false, code: 'VERIFICATION_EMAIL_UNAVAILABLE', error: 'Your account is pending verification, but the verification email could not be sent. Configure email delivery and request a new link.' });
     }
