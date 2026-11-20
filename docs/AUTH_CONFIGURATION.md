@@ -4,26 +4,47 @@ Configure these variables before deploying the authentication changes.
 
 ## Backend (Render)
 
-- `GOOGLE_CLIENT_ID`: OAuth 2.0 Web application client ID from Google Cloud.
-- `RESEND_API_KEY`: API key from Resend.
-- `EMAIL_FROM`: verified sender, for example `PAYGO <no-reply@your-verified-domain.com>`.
-- `APP_BASE_URL`: public frontend origin, for example `https://your-paygo-frontend.vercel.app`.
+- `GOOGLE_CLIENT_ID`: OAuth 2.0 Web application client ID used for Google sign-in (if enabled).
+- `GMAIL_OAUTH_CLIENT_ID`: OAuth 2.0 client ID authorized to send mail through the Gmail API.
+- `GMAIL_OAUTH_CLIENT_SECRET`: matching OAuth client secret.
+- `GMAIL_OAUTH_REFRESH_TOKEN`: offline refresh token authorized for the `https://www.googleapis.com/auth/gmail.send` scope.
+- `GMAIL_SENDER_EMAIL`: the Gmail address that authorized the Gmail API and will send PAYGO messages.
+- `APP_BASE_URL`: public frontend origin, currently `https://pay-go-frontend.vercel.app`.
 - `DATABASE_URL`: existing PostgreSQL connection string.
 - `JWT_SECRET`: a long, randomly generated secret. Do not use the development fallback in production.
 
+Do not put Gmail OAuth secrets or the refresh token in Vercel or frontend code. Store them only as Render environment variables.
+
+## Create Gmail API credentials
+
+PAYGO uses one Gmail account as its sender. Only that sender account needs to authorize the application; recipients can use Gmail, Yahoo, Outlook, or another valid email provider.
+
+1. Open Google Cloud Console and create a **new project using Personal mode**: [Google Auth Platform setup](https://console.cloud.google.com/auth/overview).
+2. Personal mode is intended for an app used only by its creator's Google account. That account will be the PAYGO sender. Google says Personal mode does not require OAuth app verification and is not subject to the seven-day test-token expiration. It is a one-time project choice and cannot later be changed to External or Internal.
+3. Enable **Gmail API** for the project.
+4. Create an OAuth 2.0 client ID. Use a Web application client if prompted.
+5. Add `https://developers.google.com/oauthplayground` as an authorized redirect URI for that client.
+6. Open [Google OAuth 2.0 Playground](https://developers.google.com/oauthplayground).
+7. Open its settings (gear icon), enable **Use your own OAuth credentials**, and enter this project's OAuth client ID and secret.
+8. In Step 1, enter the scope `https://www.googleapis.com/auth/gmail.send`, authorize using the Gmail account that will send PAYGO emails, and grant access.
+9. In Step 2, exchange the authorization code. Copy the **refresh token** from the response.
+10. Add the four `GMAIL_*` values to Render. Keep the refresh token private.
+
+If Personal mode is unavailable and you instead use an External project in Testing status, Google expires authorizations and refresh tokens after seven days for scopes such as `gmail.send`; you would need to re-authorize periodically. The Gmail send scope is sensitive. Review Google's [scope classification](https://developers.google.com/workspace/gmail/api/auth/scopes) and [OAuth verification guidance](https://support.google.com/cloud/answer/13463073) before making the integration broadly available.
+
 ## Frontend (Vercel)
 
-- `NEXT_PUBLIC_GOOGLE_CLIENT_ID`: use the exact same Google OAuth Web client ID as the backend's `GOOGLE_CLIENT_ID`.
+- `NEXT_PUBLIC_GOOGLE_CLIENT_ID`: use the exact same Google OAuth Web client ID as the backend's `GOOGLE_CLIENT_ID` for Google sign-in.
 
-In Google Cloud Console, configure the OAuth consent screen and add the deployed frontend hostname under **Authorized JavaScript origins**. The Google client ID must be a Web application client ID and must match on both services.
-
-In Resend, verify the sending domain before using it in `EMAIL_FROM`. The verification email link is built from `APP_BASE_URL` and opens the frontend route `/verify-email`.
+In Google Cloud Console, configure the OAuth consent screen and add the deployed frontend hostname under **Authorized JavaScript origins** for the Google sign-in client. Gmail API credentials are separate and must never be exposed to the frontend.
 
 ## Behaviour after deployment
 
-- Email/password registration creates a pending account and sends a one-time verification link (30-minute expiry).
+- Email/password registration creates a pending account and sends a one-time verification link (30-minute expiry) through Gmail API.
 - Password sign-in is blocked until the email is verified.
-- Google sign-in verifies Google's ID token and verified-email claim. A first-time Google user is created automatically using the selected account type; no separate registration form is required.
-- Google OAuth sign-in itself verifies the Gmail address, so it does not send a second verification email.
+- Verification links are single-use; successful verification marks the account verified and issues a normal PAYGO session.
+- Resend verification uses the same Gmail API sender and has a 60-second cooldown.
+- Meter activation-code emails also use the same Gmail API sender.
+- Google sign-in verifies Google's ID token and verified-email claim. A first-time Google user is created automatically; Google-verified email addresses do not receive a second verification email.
 
-The database migration `20261120_email_verification.sql` is applied by backend startup. Do not manually edit production tables to add these columns if the migration has already run.
+The Gmail API send endpoint is called over HTTPS. No SMTP connection or custom sending domain is required. The database migration `20261120_email_verification.sql` is applied by backend startup; do not manually edit production tables to add these columns if the migration has already run.
