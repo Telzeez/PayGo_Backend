@@ -1,0 +1,40 @@
+name: Open Source Code Scanning
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+  pull_request:
+    branches: ["main", "feat/**"]
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: code-scanning-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Semgrep Community Edition
+        run: |
+          python -m pip install semgrep
+          semgrep scan --config auto --sarif --output semgrep.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: hashFiles('semgrep.sarif') != ''
+        with:
+          sarif_file: semgrep.sarif
