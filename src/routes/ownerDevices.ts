@@ -97,7 +97,7 @@ router.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
   try {
     await client.query('BEGIN');
     const device = await client.query(
-      `SELECT device_id, owner_id, assignment_status FROM devices
+      `SELECT device_id, owner_id, assignment_status, meter_purpose FROM devices
        WHERE device_id = $1 FOR UPDATE`,
       [deviceId]
     );
