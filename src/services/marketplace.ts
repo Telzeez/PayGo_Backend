@@ -313,6 +313,8 @@ export class MarketplaceService {
       const buyerDevice = await client.query(
         `SELECT 1 FROM devices d
          WHERE d.device_id = $1 AND d.owner_id = $2
+           AND d.assignment_status = 'ACTIVATED'
+           AND d.meter_purpose = 'RECEIVING'
          FOR UPDATE`,
         [buyerDeviceId, buyerId]
       );
@@ -342,6 +344,20 @@ export class MarketplaceService {
 
       if (listing.seller_id === buyerId) {
         throw new Error('Sellers cannot purchase from their own energy listing');
+      }
+
+      // Checkout is allowed only after the prosumer has approved this
+      // customer's appliance load and the dedicated receiving meter is linked.
+      const approvedConnection = await client.query(
+        `SELECT id FROM customer_connections
+         WHERE source_id = $1 AND customer_id = $2
+           AND receiving_device_id = $3 AND status = 'APPROVED'
+           AND approved_power_w IS NOT NULL
+         FOR UPDATE`,
+        [listing.energy_source_id, buyerId, buyerDeviceId]
+      );
+      if (!approvedConnection.rows.length) {
+        throw new Error('A prosumer-approved connection and activated receiving meter are required before checkout.');
       }
 
       const availableKwh = parseFloat(listing.available_kwh);
