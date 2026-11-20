@@ -89,12 +89,14 @@ router.post('/sync', verifyFirebaseIdentity, async (req: AuthenticatedRequest, r
           [identity.sub, phone, existing.id]
         );
       } else {
-        const assignedRole = requestedRole === 'OWNER' ? 'OWNER' : 'USER';
+        // New identities start without a buyer/seller capability. The user
+        // chooses their first capability in the authenticated onboarding flow.
+        // Never grant OWNER/admin privileges through public account creation.
         result = await client.query(
           `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller, email_verified, firebase_uid)
-           VALUES ($1, $2, NULL, $3, TRUE, $4, TRUE, $5)
+           VALUES ($1, $2, NULL, 'USER', FALSE, FALSE, TRUE, $3)
            RETURNING id, email, phone, role, is_buyer, is_seller, created_at`,
-          [email, phone, assignedRole, requestedRole === 'OWNER', identity.sub]
+          [email, phone, identity.sub]
         );
       }
     }
@@ -115,6 +117,37 @@ router.post('/sync', verifyFirebaseIdentity, async (req: AuthenticatedRequest, r
     return res.status(500).json({ success: false, error: 'Unable to synchronize your PAYGO profile right now.' });
   } finally {
     client.release();
+  }
+});
+
+// Users choose capabilities after authentication. Adding a capability never
+// removes the other one, so a single account can buy and sell energy.
+router.post('/capabilities', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    const capability = typeof req.body?.capability === 'string'
+      ? req.body.capability.toUpperCase()
+      : '';
+    if (capability !== 'BUYER' && capability !== 'SELLER') {
+      return res.status(400).json({ success: false, error: 'Choose BUYER or SELLER.' });
+    }
+
+    const result = await pool.query(
+      `UPDATE users
+       SET is_buyer = is_buyer OR $1 = 'BUYER',
+           is_seller = is_seller OR $1 = 'SELLER',
+           updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, email, phone, role, is_buyer, is_seller, created_at`,
+      [capability, req.user.userId]
+    );
+    if (result.rows.length !== 1) {
+      return res.status(404).json({ success: false, error: 'PAYGO profile not found.' });
+    }
+    return res.json({ success: true, user: publicUser(result.rows[0]) });
+  } catch (error) {
+    console.error('Update account capabilities error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to update your account capabilities.' });
   }
 });
 
