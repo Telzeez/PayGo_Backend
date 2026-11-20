@@ -21,3 +21,19 @@ CREATE INDEX IF NOT EXISTS idx_device_claim_tokens_device
   ON device_claim_tokens(device_id, expires_at)
   WHERE claimed_at IS NULL;
 
+-- Keep exactly one unclaimed credential active for each physical meter.
+-- Older unused credentials are invalidated before the newest one is issued.
+UPDATE device_claim_tokens older
+SET claimed_at = NOW()
+WHERE older.claimed_at IS NULL
+  AND EXISTS (
+    SELECT 1
+    FROM device_claim_tokens newer
+    WHERE newer.device_id = older.device_id
+      AND newer.claimed_at IS NULL
+      AND (newer.created_at, newer.id) > (older.created_at, older.id)
+  );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_device_claim_tokens_one_active
+  ON device_claim_tokens(device_id)
+  WHERE claimed_at IS NULL;
