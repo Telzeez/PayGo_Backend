@@ -15,7 +15,10 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
   const deviceId = String(req.params.deviceId || '').trim();
   const ownerId = Number(req.body?.ownerId);
   const meterPurpose = String(req.body?.purpose || 'GENERATION').toUpperCase();
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !Number.isInteger(ownerId) || ownerId <= 0 || !['GENERATION', 'RECEIVING'].includes(meterPurpose)) {
+  const connectionId = req.body?.connectionId === undefined ? null : Number(req.body.connectionId);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !Number.isInteger(ownerId) || ownerId <= 0 || !['GENERATION', 'RECEIVING'].includes(meterPurpose) ||
+      (meterPurpose === 'RECEIVING' && (!Number.isInteger(connectionId) || Number(connectionId) <= 0)) ||
+      (meterPurpose === 'GENERATION' && connectionId !== null)) {
     return res.status(400).json({ success: false, error: 'A valid registered device ID and owner account ID are required.' });
   }
 
@@ -30,6 +33,19 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
     if (!user.rows[0].email_verified) {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, error: 'The target owner must verify their email before a meter can be assigned.' });
+    }
+    if (meterPurpose === 'RECEIVING') {
+      const approvedConnection = await client.query(
+        `SELECT id FROM customer_connections
+         WHERE id = $1 AND customer_id = $2 AND status = 'APPROVED'
+           AND receiving_device_id IS NULL
+         FOR UPDATE`,
+        [connectionId, ownerId]
+      );
+      if (!approvedConnection.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'A receiving meter can only be assigned to an approved connection request belonging to this customer.' });
+      }
     }
     const device = await client.query(
       `SELECT device_id, owner_id, assignment_status, meter_purpose FROM devices WHERE device_id = $1 FOR UPDATE`,
@@ -55,6 +71,18 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
        WHERE device_id = $1`,
       [deviceId, ownerId, meterPurpose]
     );
+    if (meterPurpose === 'RECEIVING') {
+      const linked = await client.query(
+        `UPDATE customer_connections SET receiving_device_id = $2, updated_at = NOW()
+         WHERE id = $1 AND customer_id = $3 AND status = 'APPROVED'
+           AND receiving_device_id IS NULL`,
+        [connectionId, deviceId, ownerId]
+      );
+      if (linked.rowCount !== 1) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Unable to link the receiving meter to this approved connection.' });
+      }
+    }
     await client.query(
       `UPDATE device_activation_codes SET used_at = NOW()
        WHERE device_id = $1 AND used_at IS NULL`,
@@ -73,6 +101,7 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
       ownerId,
       activationEmailSent: true,
       expiresInHours: 72,
+      connectionId,
       message: 'Meter assigned. A one-time activation code has been sent to the verified email address on the owner account.'
     });
   } catch (error: any) {
