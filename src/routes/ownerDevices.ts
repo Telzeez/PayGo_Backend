@@ -1,5 +1,6 @@
 import express, { Response } from 'express';
 import crypto from 'crypto';
+import { sendMeterActivationEmail } from '../services/email.js';
 import pool from '../db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
 
@@ -20,10 +21,14 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const user = await client.query('SELECT id FROM users WHERE id = $1', [ownerId]);
+    const user = await client.query('SELECT id, email, email_verified FROM users WHERE id = $1', [ownerId]);
     if (!user.rows.length) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, error: 'Target owner account was not found.' });
+    }
+    if (!user.rows[0].email_verified) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'The target owner must verify their email before a meter can be assigned.' });
     }
     const device = await client.query(
       `SELECT device_id, owner_id, assignment_status FROM devices WHERE device_id = $1 FOR UPDATE`,
@@ -59,14 +64,15 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
        VALUES ($1, $2, $3, NOW() + INTERVAL '72 hours', $4)`,
       [deviceId, ownerId, codeHash, req.user.userId]
     );
+    await sendMeterActivationEmail(user.rows[0].email, deviceId, rawCode);
     await client.query('COMMIT');
     return res.status(201).json({
       success: true,
       deviceId,
       ownerId,
-      activationCode: rawCode,
+      activationEmailSent: true,
       expiresInHours: 72,
-      message: 'Meter assigned. Deliver this one-time activation code securely to the verified owner.'
+      message: 'Meter assigned. A one-time activation code has been sent to the verified email address on the owner account.'
     });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch (_) {}
