@@ -39,7 +39,7 @@ export class MarketplaceService {
     // and activated by PAYGO. Never create or claim a device from this form.
     const deviceCheck = await pool.query(
       `SELECT id FROM devices
-       WHERE device_id = $1 AND owner_id = $2 AND assignment_status = 'ACTIVATED'
+       WHERE device_id = $1 AND owner_id = $2 AND assignment_status = 'ACTIVATED' AND meter_purpose = 'GENERATION'
        LIMIT 1`,
       [deviceId, ownerId]
     );
