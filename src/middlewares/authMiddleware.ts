@@ -62,12 +62,17 @@ async function verifyFirebaseIdToken(token: string): Promise<FirebaseClaims> {
   const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as { alg?: string; kid?: string };
   if (header.alg !== 'RS256' || !header.kid) throw new Error('Unsupported Firebase token signing key');
 
-  const keys = await getFirebaseKeys();
-  const jwk = keys.find((key) => key.kid === header.kid);
+  let keys = await getFirebaseKeys();
+  let jwk = keys.find((key) => key.kid === header.kid);
   if (!jwk) {
+    // Firebase can rotate signing keys before the current cache expires.
+    // Refresh once before rejecting a token signed by a newly published key.
     cachedKeys = [];
-    throw new Error('Unknown Firebase token signing key');
+    keysExpireAt = 0;
+    keys = await getFirebaseKeys();
+    jwk = keys.find((key) => key.kid === header.kid);
   }
+  if (!jwk) throw new Error('Unknown Firebase token signing key');
 
   const publicKey = createPublicKey({ key: jwk as any, format: 'jwk' });
   const validSignature = verifySignature(
@@ -85,6 +90,7 @@ async function verifyFirebaseIdToken(token: string): Promise<FirebaseClaims> {
     claims.iss !== ISSUER ||
     !claims.sub ||
     claims.sub.length > 128 ||
+    (claims.user_id !== undefined && claims.user_id !== claims.sub) ||
     !claims.email ||
     typeof claims.auth_time !== 'number' ||
     typeof claims.iat !== 'number' ||
