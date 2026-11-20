@@ -9,6 +9,7 @@ import deviceRoutes from './routes/devices.js';
 import ownerDeviceRoutes from './routes/ownerDevices.js';
 import transactionRoutes from './routes/transactions.js';
 import marketplaceRoutes from './routes/marketplace.js';
+import connectionRoutes from './routes/connections.js';
 
 dotenv.config();
 const app: Express = express();
@@ -46,6 +47,7 @@ app.use('/api/owner/devices', ownerDeviceRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
+app.use('/api/connections', connectionRoutes);
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), uptime: process.uptime() });
