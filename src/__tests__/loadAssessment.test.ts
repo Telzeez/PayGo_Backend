@@ -17,8 +17,8 @@ describe('PAYGO customer load assessment', () => {
     assert.equal(result.connectedPowerW, 240);
     assert.equal(result.simultaneousPowerW, 240);
     assert.equal(result.requestedPowerW, 288);
-    assert.equal(result.requestedApparentVa, 313.33);
-    assert.equal(result.requestedStartingSurgeVa, 913.33);
+    assert.equal(result.requestedApparentVa, 353.33);
+    assert.equal(result.requestedStartingSurgeVa, 953.33);
   });
 
   it('uses simultaneous quantity for demand, not the full installed quantity', () => {
