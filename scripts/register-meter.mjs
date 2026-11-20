@@ -40,6 +40,12 @@ try {
       existing.rows[0].assignment_status !== 'UNASSIGNED') {
     throw new Error('This device is already claimed or assigned; refusing to issue another claim credential.');
   }
+  // Rotate any previous unused code so only the newly printed code can claim this meter.
+  await client.query(
+    `UPDATE device_claim_tokens SET claimed_at = NOW()
+     WHERE device_id = $1 AND claimed_at IS NULL`,
+    [deviceId]
+  );
   await client.query(
     `INSERT INTO device_claim_tokens (device_id, token_hash, expires_at)
      VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
