@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS customer_connections (
   id BIGSERIAL PRIMARY KEY,
   source_id INT NOT NULL REFERENCES energy_sources(id) ON DELETE RESTRICT,
   customer_id INT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  receiving_device_id VARCHAR(50) NOT NULL REFERENCES devices(device_id) ON DELETE RESTRICT,
+  receiving_device_id VARCHAR(50) REFERENCES devices(device_id) ON DELETE RESTRICT,
   status VARCHAR(24) NOT NULL DEFAULT 'PENDING'
     CHECK (status IN ('PENDING', 'APPROVED', 'PENDING_REVISION', 'REJECTED', 'CANCELLED')),
   requested_power_w NUMERIC(12,2) NOT NULL CHECK (requested_power_w > 0),
@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS customer_connections (
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_connection_device_active
   ON customer_connections(receiving_device_id)
+  WHERE receiving_device_id IS NOT NULL
+    AND status IN ('APPROVED', 'PENDING_REVISION');
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_connection_customer_source_active
+  ON customer_connections(source_id, customer_id)
   WHERE status IN ('PENDING', 'APPROVED', 'PENDING_REVISION');
 
 CREATE INDEX IF NOT EXISTS idx_customer_connections_source_status
