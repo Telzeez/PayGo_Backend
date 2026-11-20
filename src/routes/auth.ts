@@ -262,10 +262,10 @@ router.post('/register-google', async (req: Request, res: Response) => {
     const assignedRole = role === 'OWNER' ? 'OWNER' : 'USER';
 
     const insertResult = await pool.query(
-      `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller) 
-       VALUES ($1, $2, $3, $4, $5, $6) 
+      `INSERT INTO users (email, phone, password_hash, role, is_buyer, is_seller, email_verified)
+       VALUES ($1, $2, NULL, $3, $4, $5, TRUE)
        RETURNING id, email, phone, role, is_buyer, is_seller, created_at`,
-      [normalizedEmail, phone || null, null, assignedRole, isBuyer, isSeller]
+      [normalizedEmail, phone || null, assignedRole, isBuyer, isSeller]
     );
 
     const newUser = insertResult.rows[0];
