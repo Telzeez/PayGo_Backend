@@ -17,7 +17,8 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+  // Verify PostgreSQL server certificates in production; never bypass TLS validation.
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : undefined,
 });
 const claimCode = crypto.randomBytes(16).toString('hex').toUpperCase();
 const tokenHash = crypto.createHash('sha256').update(claimCode).digest('hex');
