@@ -1,55 +1,137 @@
 import express, { Response } from 'express';
+import crypto from 'crypto';
 import pool from '../db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 router.use(authenticateToken);
 
-router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
-  const ownerId = req.user!.userId;
-  const deviceId = String(req.body?.deviceId || '').trim();
-
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId)) {
-    return res.status(400).json({ success: false, error: 'Enter a valid meter device ID (3–50 letters, numbers, hyphens or underscores).' });
+// Platform-controlled provisioning. The meter must already exist in the device registry.
+router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.role !== 'ADMIN') {
+    return res.status(403).json({ success: false, error: 'Administrator access required' });
+  }
+  const deviceId = String(req.params.deviceId || '').trim();
+  const ownerId = Number(req.body?.ownerId);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !Number.isInteger(ownerId) || ownerId <= 0) {
+    return res.status(400).json({ success: false, error: 'A valid registered device ID and owner account ID are required.' });
   }
 
+  const client = await pool.connect();
   try {
-    // A buyer may claim a meter only after the physical device has checked in
-    // and created its registry row. A meter already linked to another owner
-    // cannot be reassigned through this self-service endpoint.
-    const result = await pool.query(
-      `UPDATE devices d
-       SET owner_id = $2
-       WHERE d.device_id = $1
-         AND (d.owner_id IS NULL OR d.owner_id = $2)
-         AND NOT EXISTS (
-           SELECT 1 FROM energy_sources es
-           WHERE es.device_id = d.device_id AND es.owner_id <> $2
-         )
-       RETURNING d.device_id AS "deviceId", d.current_balance AS balance, d.status,
-                 d.last_seen_at AS "lastSeenAt", d.last_updated AS "lastUpdated"`,
-      [deviceId, ownerId]
+    await client.query('BEGIN');
+    const user = await client.query('SELECT id FROM users WHERE id = $1', [ownerId]);
+    if (!user.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Target owner account was not found.' });
+    }
+    const device = await client.query(
+      `SELECT device_id, owner_id, assignment_status FROM devices WHERE device_id = $1 FOR UPDATE`,
+      [deviceId]
     );
-
-    if (!result.rows.length) {
-      const existing = await pool.query(
-        'SELECT owner_id FROM devices WHERE device_id = $1',
-        [deviceId]
-      );
-      if (!existing.rows.length) {
-        return res.status(404).json({ success: false, code: 'METER_NOT_FOUND', error: 'This meter has not connected to the PAYGO server yet. Power it on and wait for its first heartbeat, then try again.' });
-      }
-      return res.status(409).json({ success: false, code: 'METER_ALREADY_ASSIGNED', error: 'This meter is already assigned to another account.' });
+    if (!device.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Meter is not registered in the PAYGO device registry.' });
+    }
+    if (device.rows[0].owner_id && Number(device.rows[0].owner_id) !== ownerId) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Meter is already assigned to another account.' });
+    }
+    if (device.rows[0].assignment_status === 'ACTIVATED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Meter has already been activated.' });
     }
 
-    return res.status(200).json({
+    const rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
+    const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
+    await client.query(
+      `UPDATE devices SET owner_id = $2, assignment_status = 'ASSIGNED', assigned_at = NOW()
+       WHERE device_id = $1`,
+      [deviceId, ownerId]
+    );
+    await client.query(
+      `UPDATE device_activation_codes SET used_at = NOW()
+       WHERE device_id = $1 AND used_at IS NULL`,
+      [deviceId]
+    );
+    await client.query(
+      `INSERT INTO device_activation_codes (device_id, owner_id, code_hash, expires_at, created_by)
+       VALUES ($1, $2, $3, NOW() + INTERVAL '72 hours', $4)`,
+      [deviceId, ownerId, codeHash, req.user.userId]
+    );
+    await client.query('COMMIT');
+    return res.status(201).json({
       success: true,
-      device: { ...result.rows[0], balance: Number(result.rows[0].balance || 0) },
-      message: 'Meter connected to your account.',
+      deviceId,
+      ownerId,
+      activationCode: rawCode,
+      expiresInHours: 72,
+      message: 'Meter assigned. Deliver this one-time activation code securely to the verified owner.'
     });
   } catch (error: any) {
-    console.error('Meter claim error:', error);
-    return res.status(500).json({ success: false, error: 'Unable to connect this meter right now.' });
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Meter provisioning error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to provision this meter.' });
+  } finally {
+    client.release();
+  }
+});
+
+// Owner activates only a meter that the platform has already assigned to their account.
+router.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
+  const ownerId = req.user!.userId;
+  const deviceId = String(req.body?.deviceId || '').trim();
+  const code = String(req.body?.activationCode || '').trim().toUpperCase();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !/^[A-F0-9]{10}$/.test(code)) {
+    return res.status(400).json({ success: false, error: 'Enter the meter ID and the 10-character activation code supplied by PAYGO.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const device = await client.query(
+      `SELECT device_id, owner_id, assignment_status FROM devices
+       WHERE device_id = $1 FOR UPDATE`,
+      [deviceId]
+    );
+    if (!device.rows.length || Number(device.rows[0].owner_id) !== ownerId) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'No meter has been assigned to this account with that ID.' });
+    }
+    if (device.rows[0].assignment_status === 'ACTIVATED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'This meter is already activated on your account.' });
+    }
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const activation = await client.query(
+      `SELECT id, failed_attempts FROM device_activation_codes
+       WHERE device_id = $1 AND owner_id = $2 AND code_hash = $3
+         AND used_at IS NULL AND expires_at > NOW() AND failed_attempts < 5
+       FOR UPDATE`,
+      [deviceId, ownerId, codeHash]
+    );
+    if (!activation.rows.length) {
+      await client.query(
+        `UPDATE device_activation_codes SET failed_attempts = failed_attempts + 1
+         WHERE device_id = $1 AND owner_id = $2 AND used_at IS NULL AND expires_at > NOW()`,
+        [deviceId, ownerId]
+      );
+      await client.query('COMMIT');
+      return res.status(400).json({ success: false, error: 'Invalid, expired, or previously used activation code.' });
+    }
+    await client.query('UPDATE device_activation_codes SET used_at = NOW() WHERE id = $1', [activation.rows[0].id]);
+    await client.query(
+      `UPDATE devices SET assignment_status = 'ACTIVATED' WHERE device_id = $1 AND owner_id = $2`,
+      [deviceId, ownerId]
+    );
+    await client.query('COMMIT');
+    return res.json({ success: true, deviceId, message: 'Your PAYGO meter is now activated.' });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Meter activation error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to activate this meter.' });
+  } finally {
+    client.release();
   }
 });
 
