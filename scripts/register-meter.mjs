@@ -4,10 +4,11 @@ import { Pool } from 'pg';
 
 const deviceId = String(process.argv[2] || '').trim();
 const purpose = String(process.argv[3] || '').trim().toUpperCase();
+const shortCodeMode = process.argv[4] === '--short';
 
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) ||
     !['GENERATION', 'RECEIVING'].includes(purpose)) {
-  console.error('Usage: node scripts/register-meter.mjs <DEVICE_ID> <GENERATION|RECEIVING>');
+  console.error('Usage: node scripts/register-meter.mjs <DEVICE_ID> <GENERATION|RECEIVING> [--short]');
   process.exit(1);
 }
 if (!process.env.DATABASE_URL) {
@@ -20,7 +21,7 @@ const pool = new Pool({
   // Verify PostgreSQL server certificates in production; never bypass TLS validation.
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : undefined,
 });
-const claimCode = crypto.randomBytes(16).toString('hex').toUpperCase();
+const claimCode = crypto.randomBytes(shortCodeMode ? 5 : 16).toString('hex').toUpperCase();
 const tokenHash = crypto.createHash('sha256').update(claimCode).digest('hex');
 const client = await pool.connect();
 
@@ -58,11 +59,11 @@ try {
   );
   await client.query(
     `INSERT INTO device_claim_tokens (device_id, token_hash, expires_at)
-     VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
+     VALUES ($1, $2, NOW() + ${shortCodeMode ? "INTERVAL '72 hours'" : "INTERVAL '30 days'"})`,
     [deviceId, tokenHash]
   );
   await client.query('COMMIT');
-  console.log('Meter registered. Give this one-time claim code to the physical meter owner securely:');
+  console.log(`Meter registered. Give this one-time ${shortCodeMode ? '10-character activation' : '32-character claim'} code to the physical meter owner securely:`);
   console.log(claimCode);
   console.log('The code is shown once. Store it securely; it cannot be retrieved from the database.');
 } catch (error) {
