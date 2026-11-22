@@ -218,6 +218,8 @@ export class MarketplaceService {
         s.owner_id AS "sellerId",
         u.email AS "sellerEmail",
         s.device_id AS "deviceId",
+        s.latitude AS "sourceLatitudeRaw",
+        s.longitude AS "sourceLongitudeRaw",
         ROUND(s.latitude::numeric, 3) AS "sourceLatitude",
         ROUND(s.longitude::numeric, 3) AS "sourceLongitude",
         s.service_radius_m AS "serviceRadiusMeters",
@@ -240,8 +242,8 @@ export class MarketplaceService {
     const nearbyListings: NearbyListingItem[] = [];
 
     for (const row of result.rows) {
-      const sourceLat = parseFloat(row.sourceLatitude);
-      const sourceLon = parseFloat(row.sourceLongitude);
+      const sourceLat = parseFloat(row.sourceLatitudeRaw);
+      const sourceLon = parseFloat(row.sourceLongitudeRaw);
       const availableKwh = parseFloat(row.availableKwhRaw || 0);
       const reservedKwh = parseFloat(row.reservedKwhRaw || 0);
       const remainingSellable = availableKwh - reservedKwh;
@@ -281,8 +283,8 @@ export class MarketplaceService {
         status: row.status,
         deviceStatus: row.deviceStatus as 'ONLINE' | 'OFFLINE',
         lastSeenAt: row.lastSeenAt,
-        sourceLatitude: sourceLat,
-        sourceLongitude: sourceLon,
+        sourceLatitude: parseFloat(row.sourceLatitude),
+        sourceLongitude: parseFloat(row.sourceLongitude),
       });
     }
 
