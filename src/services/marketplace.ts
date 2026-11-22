@@ -24,15 +24,19 @@ export class MarketplaceService {
     latitude: number;
     longitude: number;
     accuracy?: number;
+    ts?: number;
     serviceRadiusMeters?: number;
   }): Promise<EnergySource> {
-    const { ownerId, deviceId, name, latitude, longitude, accuracy, serviceRadiusMeters = 500 } = params;
+    const { ownerId, deviceId, name, latitude, longitude, accuracy, ts, serviceRadiusMeters = 500 } = params;
 
     if (!isValidCoordinate(latitude, longitude)) {
       throw new Error('Invalid latitude or longitude coordinates');
     }
     if (accuracy === undefined || !Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 20) {
       throw new Error('Your location signal is not clear enough. Please wait for a more accurate reading.');
+    }
+    if (ts === undefined || !Number.isFinite(ts) || Math.abs(Date.now() - ts) > 120000) {
+      throw new Error('This location reading has expired. Please capture your location again.');
     }
 
     if (serviceRadiusMeters <= 0 || serviceRadiusMeters > DEFAULT_PLATFORM_MAX_RADIUS_METERS) {
