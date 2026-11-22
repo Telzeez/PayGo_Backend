@@ -5,6 +5,21 @@ import { MarketplaceService } from '../services/marketplace.js';
 
 const router = express.Router();
 
+// Lightweight per-IP discovery throttle; keeps repeated coordinate probing bounded.
+const nearbyRequests = new Map<string, { count: number; resetAt: number }>();
+const nearbyRateLimit: express.RequestHandler = (req, res, next) => {
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const current = nearbyRequests.get(key);
+  if (!current || current.resetAt <= now) {
+    nearbyRequests.set(key, { count: 1, resetAt: now + 60_000 });
+    return next();
+  }
+  if (current.count >= 30) return res.status(429).json({ success: false, error: 'Too many nearby searches. Please wait a minute and try again.' });
+  current.count += 1;
+  return next();
+};
+
 // ==========================================
 // BUYER LOCATION: save only after the buyer confirms GPS coordinates
 // ==========================================
@@ -192,9 +207,11 @@ router.post('/listings/:id/activate', authenticateToken, async (req: Authenticat
 // ==========================================
 // 6. BUYER DISCOVERY: GET NEARBY LISTINGS
 // ==========================================
-router.get('/nearby', async (req: express.Request, res: Response) => {
+router.get('/nearby', nearbyRateLimit, async (req: express.Request, res: Response) => {
   try {
-    const { latitude, longitude, radiusMeters } = req.query;
+    const latitude = req.query.lat ?? req.query.latitude;
+    const longitude = req.query.lng ?? req.query.longitude;
+    const radiusMeters = req.query.radius ?? req.query.radiusMeters;
 
     if (latitude === undefined || longitude === undefined) {
       return res.status(400).json({
@@ -234,12 +251,12 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
     }
 
     const listingId = parseInt(`${req.params.id}`, 10);
-    const { kwhRequested, buyerLatitude, buyerLongitude, buyerDeviceId } = req.body;
+    const { kwhRequested, buyerDeviceId } = req.body;
 
-    if (!kwhRequested || !buyerDeviceId || buyerLatitude === undefined || buyerLongitude === undefined) {
+    if (!kwhRequested || !buyerDeviceId) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required parameters: kwhRequested, buyerDeviceId, buyerLatitude, buyerLongitude',
+        error: 'Missing required parameters: kwhRequested, buyerDeviceId',
       });
     }
 
@@ -248,8 +265,6 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
       buyerDeviceId,
       listingId,
       kwhRequested: parseFloat(kwhRequested),
-      buyerLatitude: parseFloat(buyerLatitude),
-      buyerLongitude: parseFloat(buyerLongitude),
     });
 
     return res.status(201).json({
