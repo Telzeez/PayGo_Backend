@@ -31,7 +31,7 @@ export class MarketplaceService {
     if (!isValidCoordinate(latitude, longitude)) {
       throw new Error('Invalid latitude or longitude coordinates');
     }
-    if (accuracy !== undefined && (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 20)) {
+    if (accuracy === undefined || !Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 20) {
       throw new Error('Your location signal is not clear enough. Please wait for a more accurate reading.');
     }
 
