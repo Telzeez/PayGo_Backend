@@ -2,62 +2,120 @@ import express, { Response } from 'express';
 import pool from '../db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
 import { MarketplaceService } from '../services/marketplace.js';
+import { calculateHaversineDistance, isValidCoordinate } from '../services/location.js';
 
 const router = express.Router();
 
-// ==========================================
-// BUYER LOCATION: save only after the buyer confirms GPS coordinates
-// ==========================================
-router.post('/location', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
-    const latitude = Number(req.body?.latitude);
-    const longitude = Number(req.body?.longitude);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) ||
-        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-      return res.status(400).json({ success: false, error: 'Valid latitude and longitude are required.' });
-    }
-    const result = await pool.query(
-      `INSERT INTO user_locations (user_id, latitude, longitude, location_source, updated_at)
-       VALUES ($1, $2, $3, 'GPS', NOW())
-       ON CONFLICT (user_id) DO UPDATE
-       SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
-           location_source = 'GPS', updated_at = NOW()
-       RETURNING latitude, longitude, updated_at AS "updatedAt"`,
-      [req.user.userId, latitude, longitude]
-    );
-    return res.json({ success: true, location: result.rows[0] });
-  } catch (error: any) {
-    console.error('Save buyer location error:', error);
-    return res.status(500).json({ success: false, error: 'Unable to save your location.' });
+// Lightweight per-IP discovery throttle; keeps repeated coordinate probing bounded.
+const nearbyRequests = new Map<string, { count: number; resetAt: number }>();
+const nearbyRateLimit: express.RequestHandler = (req, res, next) => {
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const current = nearbyRequests.get(key);
+  if (!current || current.resetAt <= now) {
+    nearbyRequests.set(key, { count: 1, resetAt: now + 60_000 });
+    return next();
   }
-});
-
-router.get('/location/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
-    const result = await pool.query(
-      `SELECT latitude, longitude, location_source AS "locationSource", updated_at AS "updatedAt"
-       FROM user_locations WHERE user_id = $1 LIMIT 1`,
-      [req.user.userId]
-    );
-    return res.json({ success: true, location: result.rows[0] || null });
-  } catch (error: any) {
-    console.error('Get buyer location error:', error);
-    return res.status(500).json({ success: false, error: 'Unable to load your saved location.' });
-  }
-});
+  if (current.count >= 30) return res.status(429).json({ success: false, error: 'Too many nearby searches. Please wait a minute and try again.' });
+  current.count += 1;
+  return next();
+};
 
 // ==========================================
+// Buyer coordinates are transient discovery input; never persist them.
+router.post('/location', authenticateToken, async (_req: AuthenticatedRequest, res: Response) => {
+  return res.status(410).json({ success: false, error: 'Buyer locations are used only for nearby discovery and are not saved.' });
+});
+router.get('/location/me', authenticateToken, async (_req: AuthenticatedRequest, res: Response) => {
+  return res.json({ success: true, location: null });
+});
+
+// Seller location verification and listing lifecycle.
+const SELLER_LOCATION_MAX_DISTANCE_METERS = Math.max(1, Number.parseInt(process.env.PAYGO_SELLER_LOCATION_MAX_DISTANCE_METERS || '50', 10) || 50);
+const SELLER_LOCATION_TOLERANCE_METERS = 5;
+const sellerLocationRequests = new Map<number, { count: number; resetAt: number }>();
+const sellerLocationRateLimit: express.RequestHandler = (req, res, next) => {
+  const userId = (req as AuthenticatedRequest).user?.userId;
+  if (!userId) return res.status(401).json({ success: false, error: 'Authentication required' });
+  const now = Date.now();
+  const current = sellerLocationRequests.get(userId);
+  if (!current || current.resetAt <= now) {
+    sellerLocationRequests.set(userId, { count: 1, resetAt: now + 300_000 });
+    return next();
+  }
+  if (current.count >= 8) return res.status(429).json({ success: false, error: 'Too many location updates. Please wait a few minutes and try again.' });
+  current.count += 1;
+  return next();
+};
+async function validateSellerLocation(req: AuthenticatedRequest, sourceId: number) {
+  const latitude = Number(req.body?.latitude), longitude = Number(req.body?.longitude);
+  const accuracy = Number(req.body?.accuracy), timestamp = Number(req.body?.ts);
+  if (!isValidCoordinate(latitude, longitude)) throw new Error('A valid current location is required.');
+  if (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 20) throw new Error('Your location signal is not clear enough yet. Please wait for a more accurate reading.');
+  if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > 120000) throw new Error('This location reading has expired. Please capture your location again.');
+  const result = await pool.query('SELECT id, latitude, longitude FROM energy_sources WHERE id = $1 AND owner_id = $2 LIMIT 1', [sourceId, req.user!.userId]);
+  if (!result.rows.length) throw new Error('Energy source not found or access denied.');
+  const source = result.rows[0];
+  const distance = calculateHaversineDistance(latitude, longitude, Number(source.latitude), Number(source.longitude));
+  if (distance > SELLER_LOCATION_MAX_DISTANCE_METERS + SELLER_LOCATION_TOLERANCE_METERS) throw new Error(`You are about ${distance} m from the saved meter location. Move closer (within ${SELLER_LOCATION_MAX_DISTANCE_METERS} m) and try again.`);
+  return { latitude, longitude, accuracy, distance };
+}
+router.put('/sources/:id/location', authenticateToken, sellerLocationRateLimit, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+    const sourceId = Number.parseInt(String(req.params.id), 10);
+    const checked = await validateSellerLocation(req, sourceId);
+    await pool.query('UPDATE energy_sources SET latitude = $1, longitude = $2, location_accuracy_m = $3, location_set_at = NOW(), location_verified_at = NOW(), updated_at = NOW() WHERE id = $4 AND owner_id = $5', [checked.latitude, checked.longitude, checked.accuracy, sourceId, req.user.userId]);
+    await pool.query("INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type, latitude, longitude, accuracy_m, distance_from_previous_m) VALUES ($1, $2, 'LOCATION_UPDATED', $3, $4, $5, $6)", [sourceId, req.user.userId, checked.latitude, checked.longitude, checked.accuracy, checked.distance]);
+    return res.json({ success: true, message: 'Your meter location has been verified.', distanceMeters: checked.distance });
+  } catch (error: any) { return res.status(400).json({ success: false, error: error.message || 'Unable to verify this location.' }); }
+});
+router.post('/sources/:id/revoke', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  const client = await pool.connect();
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+    const sourceId = Number.parseInt(String(req.params.id), 10);
+    await client.query('BEGIN');
+    const source = await client.query('SELECT id FROM energy_sources WHERE id = $1 AND owner_id = $2 FOR UPDATE', [sourceId, req.user.userId]);
+    if (!source.rows.length) throw new Error('Energy source not found or access denied.');
+    await client.query("UPDATE energy_sources SET status = 'SUSPENDED', updated_at = NOW() WHERE id = $1", [sourceId]);
+    await client.query("UPDATE energy_listings SET status = 'REVOKED', updated_at = NOW() WHERE energy_source_id = $1 AND status <> 'REVOKED'", [sourceId]);
+    await client.query("INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type) VALUES ($1, $2, 'REVOKED')", [sourceId, req.user.userId]);
+    await client.query('COMMIT');
+    return res.json({ success: true, message: 'Your energy listing has been revoked.' });
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    return res.status(400).json({ success: false, error: error.message || 'Unable to revoke listing.' });
+  } finally { client.release(); }
+});
+router.post('/sources/:id/relist', authenticateToken, sellerLocationRateLimit, async (req: AuthenticatedRequest, res: Response) => {
+  const client = await pool.connect();
+  try {
+    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
+    const sourceId = Number.parseInt(String(req.params.id), 10);
+    const checked = await validateSellerLocation(req, sourceId);
+    await client.query('BEGIN');
+    await client.query("UPDATE energy_sources SET status = 'ACTIVE', latitude = $1, longitude = $2, location_accuracy_m = $3, location_set_at = NOW(), location_verified_at = NOW(), updated_at = NOW() WHERE id = $4 AND owner_id = $5", [checked.latitude, checked.longitude, checked.accuracy, sourceId, req.user.userId]);
+    const restored = await client.query("UPDATE energy_listings SET status = 'ACTIVE', updated_at = NOW() WHERE energy_source_id = $1 AND seller_id = $2 AND status = 'REVOKED' RETURNING id", [sourceId, req.user.userId]);
+    if (!restored.rows.length) throw new Error('There is no revoked offer to relist. Create a new offer instead.');
+    await client.query("INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type, latitude, longitude, accuracy_m, distance_from_previous_m) VALUES ($1, $2, 'RELISTED', $3, $4, $5, $6)", [sourceId, req.user.userId, checked.latitude, checked.longitude, checked.accuracy, checked.distance]);
+    await client.query('COMMIT');
+    return res.json({ success: true, message: 'Your listing is active again.' });
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    return res.status(400).json({ success: false, error: error.message || 'Unable to relist this offer.' });
+  } finally { client.release(); }
+});
+
 // 1. REGISTER ENERGY SOURCE (SELLER)
 // ==========================================
-router.post('/sources', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources', authenticateToken, sellerLocationRateLimit, async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
-    const { deviceId, name, latitude, longitude, serviceRadiusMeters } = req.body;
+    const { deviceId, name, latitude, longitude, accuracy, ts, serviceRadiusMeters } = req.body;
 
     if (!deviceId || !name || latitude === undefined || longitude === undefined) {
       return res.status(400).json({
@@ -72,6 +130,8 @@ router.post('/sources', authenticateToken, async (req: AuthenticatedRequest, res
       name,
       latitude: parseFloat(latitude),
       longitude: parseFloat(longitude),
+      accuracy: accuracy === undefined ? undefined : parseFloat(accuracy),
+      ts: ts === undefined ? undefined : Number(ts),
       serviceRadiusMeters: serviceRadiusMeters ? parseInt(serviceRadiusMeters, 10) : 500,
     });
 
@@ -192,9 +252,11 @@ router.post('/listings/:id/activate', authenticateToken, async (req: Authenticat
 // ==========================================
 // 6. BUYER DISCOVERY: GET NEARBY LISTINGS
 // ==========================================
-router.get('/nearby', async (req: express.Request, res: Response) => {
+router.get('/nearby', nearbyRateLimit, async (req: express.Request, res: Response) => {
   try {
-    const { latitude, longitude, radiusMeters } = req.query;
+    const latitude = req.query.lat ?? req.query.latitude;
+    const longitude = req.query.lng ?? req.query.longitude;
+    const radiusMeters = req.query.radius ?? req.query.radiusMeters;
 
     if (latitude === undefined || longitude === undefined) {
       return res.status(400).json({
@@ -234,12 +296,12 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
     }
 
     const listingId = parseInt(`${req.params.id}`, 10);
-    const { kwhRequested, buyerLatitude, buyerLongitude, buyerDeviceId } = req.body;
+    const { kwhRequested, buyerDeviceId } = req.body;
 
-    if (!kwhRequested || !buyerDeviceId || buyerLatitude === undefined || buyerLongitude === undefined) {
+    if (!kwhRequested || !buyerDeviceId) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required parameters: kwhRequested, buyerDeviceId, buyerLatitude, buyerLongitude',
+        error: 'Missing required parameters: kwhRequested, buyerDeviceId',
       });
     }
 
@@ -248,8 +310,6 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
       buyerDeviceId,
       listingId,
       kwhRequested: parseFloat(kwhRequested),
-      buyerLatitude: parseFloat(buyerLatitude),
-      buyerLongitude: parseFloat(buyerLongitude),
     });
 
     return res.status(201).json({

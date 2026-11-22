@@ -23,12 +23,20 @@ export class MarketplaceService {
     name: string;
     latitude: number;
     longitude: number;
+    accuracy?: number;
+    ts?: number;
     serviceRadiusMeters?: number;
   }): Promise<EnergySource> {
-    const { ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters = 500 } = params;
+    const { ownerId, deviceId, name, latitude, longitude, accuracy, ts, serviceRadiusMeters = 500 } = params;
 
     if (!isValidCoordinate(latitude, longitude)) {
       throw new Error('Invalid latitude or longitude coordinates');
+    }
+    if (accuracy === undefined || !Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 20) {
+      throw new Error('Your location signal is not clear enough. Please wait for a more accurate reading.');
+    }
+    if (ts === undefined || !Number.isFinite(ts) || Math.abs(Date.now() - ts) > 120000) {
+      throw new Error('This location reading has expired. Please capture your location again.');
     }
 
     if (serviceRadiusMeters <= 0 || serviceRadiusMeters > DEFAULT_PLATFORM_MAX_RADIUS_METERS) {
@@ -56,16 +64,21 @@ export class MarketplaceService {
 
     const result = await pool.query(
       `INSERT INTO energy_sources 
-       (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
+       (owner_id, device_id, name, latitude, longitude, service_radius_m, status, location_set_at, location_accuracy_m, location_verified_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', NOW(), $7, NOW())
        RETURNING id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
                  service_radius_m AS "serviceRadiusMeters",
                  max_capacity_w AS "maxCapacityW", max_capacity_va AS "maxCapacityVa",
                  max_surge_va AS "maxSurgeVa", safety_margin_pct AS "safetyMarginPct",
                  status, created_at AS "createdAt", updated_at AS "updatedAt"`,
-      [ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters]
+      [ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters, accuracy ?? null]
     );
 
+    await pool.query(
+      `INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type, latitude, longitude, accuracy_m)
+       VALUES ($1, $2, 'LOCATION_SET', $3, $4, $5)`,
+      [result.rows[0].id, ownerId, latitude, longitude, accuracy ?? null]
+    );
     return result.rows[0];
   }
 
@@ -161,7 +174,8 @@ export class MarketplaceService {
     const result = await pool.query(
       `UPDATE energy_listings
        SET status = $1, updated_at = NOW()
-       WHERE id = $2 AND seller_id = $3
+       WHERE id = $2 AND seller_id = $3 AND status <> 'REVOKED'
+         AND EXISTS (SELECT 1 FROM energy_sources s WHERE s.id = energy_source_id AND s.status = 'ACTIVE')
        RETURNING id, energy_source_id AS "energySourceId", seller_id AS "sellerId",
                  available_kwh AS "availableKwh", reserved_kwh AS "reservedKwh",
                  price_per_kwh AS "pricePerKwh", status, expires_at AS "expiresAt",
@@ -173,6 +187,11 @@ export class MarketplaceService {
       throw new Error('Listing not found or access denied');
     }
 
+    await pool.query(
+      `INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type)
+       SELECT energy_source_id, $2, $3 FROM energy_listings WHERE id = $1`,
+      [listingId, sellerId, status === 'PAUSED' ? 'PAUSED' : 'ACTIVATED']
+    );
     return result.rows[0];
   }
 
@@ -199,8 +218,10 @@ export class MarketplaceService {
         s.owner_id AS "sellerId",
         u.email AS "sellerEmail",
         s.device_id AS "deviceId",
-        s.latitude AS "sourceLatitude",
-        s.longitude AS "sourceLongitude",
+        s.latitude AS "sourceLatitudeRaw",
+        s.longitude AS "sourceLongitudeRaw",
+        ROUND(s.latitude::numeric, 3) AS "sourceLatitude",
+        ROUND(s.longitude::numeric, 3) AS "sourceLongitude",
         s.service_radius_m AS "serviceRadiusMeters",
         l.available_kwh AS "availableKwhRaw",
         l.reserved_kwh AS "reservedKwhRaw",
@@ -221,8 +242,8 @@ export class MarketplaceService {
     const nearbyListings: NearbyListingItem[] = [];
 
     for (const row of result.rows) {
-      const sourceLat = parseFloat(row.sourceLatitude);
-      const sourceLon = parseFloat(row.sourceLongitude);
+      const sourceLat = parseFloat(row.sourceLatitudeRaw);
+      const sourceLon = parseFloat(row.sourceLongitudeRaw);
       const availableKwh = parseFloat(row.availableKwhRaw || 0);
       const reservedKwh = parseFloat(row.reservedKwhRaw || 0);
       const remainingSellable = availableKwh - reservedKwh;
@@ -262,8 +283,8 @@ export class MarketplaceService {
         status: row.status,
         deviceStatus: row.deviceStatus as 'ONLINE' | 'OFFLINE',
         lastSeenAt: row.lastSeenAt,
-        sourceLatitude: sourceLat,
-        sourceLongitude: sourceLon,
+        sourceLatitude: parseFloat(row.sourceLatitude),
+        sourceLongitude: parseFloat(row.sourceLongitude),
       });
     }
 
@@ -273,35 +294,29 @@ export class MarketplaceService {
     // 3. Price ASC (cheapest first)
     // 4. Available kWh DESC (most energy first)
     nearbyListings.sort((a, b) => {
+      if (a.distanceMeters !== b.distanceMeters) return a.distanceMeters - b.distanceMeters;
       if (a.deviceStatus === 'ONLINE' && b.deviceStatus !== 'ONLINE') return -1;
       if (a.deviceStatus !== 'ONLINE' && b.deviceStatus === 'ONLINE') return 1;
-      if (a.distanceMeters !== b.distanceMeters) return a.distanceMeters - b.distanceMeters;
       if (a.pricePerKwh !== b.pricePerKwh) return a.pricePerKwh - b.pricePerKwh;
       return b.availableKwh - a.availableKwh;
     });
 
-    return nearbyListings;
+    return nearbyListings.slice(0, 20);
   }
 
   /**
-   * Concurrency-safe Purchase Intent Creation with energy reservation & distance recalculation
+   * Concurrency-safe Purchase Intent Creation; buyer distance is not a checkout restriction
    */
   static async createPurchaseIntent(params: {
     buyerId: number;
     buyerDeviceId: string;
     listingId: number;
     kwhRequested: number;
-    buyerLatitude: number;
-    buyerLongitude: number;
   }): Promise<{ purchase: MarketplacePurchase; redirectUrl?: string }> {
-    const { buyerId, buyerDeviceId, listingId, kwhRequested, buyerLatitude, buyerLongitude } = params;
+    const { buyerId, buyerDeviceId, listingId, kwhRequested } = params;
 
     if (kwhRequested <= 0) {
       throw new Error('Requested energy must be greater than 0 kWh');
-    }
-
-    if (!isValidCoordinate(buyerLatitude, buyerLongitude)) {
-      throw new Error('Invalid buyer latitude or longitude coordinates');
     }
 
     const client = await pool.connect();
@@ -312,7 +327,7 @@ export class MarketplaceService {
       // Lock listing row for update to prevent concurrent overselling
       const listingRes = await client.query(
         `SELECT l.id, l.seller_id, l.energy_source_id, l.available_kwh, l.reserved_kwh, l.price_per_kwh, l.status,
-                s.device_id, s.latitude AS source_lat, s.longitude AS source_lon, s.service_radius_m
+                s.status AS source_status, s.device_id
          FROM energy_listings l
          JOIN energy_sources s ON l.energy_source_id = s.id
          WHERE l.id = $1 FOR UPDATE`,
@@ -325,8 +340,8 @@ export class MarketplaceService {
 
       const listing = listingRes.rows[0];
 
-      if (listing.status !== 'ACTIVE') {
-        throw new Error('Listing is no longer active for purchase');
+      if (listing.status !== 'ACTIVE' || listing.source_status !== 'ACTIVE') {
+        throw new Error('This seller is no longer available for purchase.');
       }
 
       if (listing.seller_id === buyerId) {
@@ -361,24 +376,9 @@ export class MarketplaceService {
         throw new Error(`Only ${remainingSellable.toFixed(2)} kWh remains available for purchase`);
       }
 
-      // Server-side distance recalculation at purchase time
-      const sourceLat = parseFloat(listing.source_lat);
-      const sourceLon = parseFloat(listing.source_lon);
-      const distanceMeters = calculateHaversineDistance(
-        buyerLatitude,
-        buyerLongitude,
-        sourceLat,
-        sourceLon
-      );
-
-      const effectiveRadiusMeters = calculateEffectiveRadius(
-        DEFAULT_PLATFORM_MAX_RADIUS_METERS,
-        listing.service_radius_m
-      );
-
-      if (!isWithinServiceRadius(distanceMeters, effectiveRadiusMeters)) {
-        throw new Error(`Buyer location (${distanceMeters}m) is outside allowed service radius (${effectiveRadiusMeters}m)`);
-      }
+      // Buyer location is used only for discovery, never as a checkout restriction.
+      // distance_m is retained for legacy schema compatibility and is zero for remote purchases.
+      const distanceMeters = 0;
 
       const pricePerKwh = parseFloat(listing.price_per_kwh);
       const amount = Math.round(kwhRequested * pricePerKwh);
