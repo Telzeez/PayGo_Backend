@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS energy_source_location_events (
   id BIGSERIAL PRIMARY KEY,
   energy_source_id INT NOT NULL REFERENCES energy_sources(id) ON DELETE CASCADE,
   actor_user_id INT REFERENCES users(id) ON DELETE SET NULL,
-  event_type VARCHAR(24) NOT NULL CHECK (event_type IN ('LOCATION_SET', 'LOCATION_UPDATED', 'PAUSED', 'REVOKED', 'RELISTED')),
+  event_type VARCHAR(24) NOT NULL CHECK (event_type IN ('LOCATION_SET', 'LOCATION_UPDATED', 'PAUSED', 'ACTIVATED', 'REVOKED', 'RELISTED')),
   latitude DECIMAL(10,8),
   longitude DECIMAL(11,8),
   accuracy_m DECIMAL(8,2),
@@ -34,3 +34,6 @@ CREATE TABLE IF NOT EXISTS energy_source_location_events (
 );
 CREATE INDEX IF NOT EXISTS idx_energy_source_location_events_source_created
   ON energy_source_location_events(energy_source_id, created_at DESC);
+
+-- Buyer coordinates are transient discovery input and are not retained.
+DELETE FROM user_locations;
