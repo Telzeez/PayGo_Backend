@@ -22,49 +22,14 @@ const nearbyRateLimit: express.RequestHandler = (req, res, next) => {
 };
 
 // ==========================================
-// BUYER LOCATION: save only after the buyer confirms GPS coordinates
-// ==========================================
-router.post('/location', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
-    const latitude = Number(req.body?.latitude);
-    const longitude = Number(req.body?.longitude);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) ||
-        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-      return res.status(400).json({ success: false, error: 'Valid latitude and longitude are required.' });
-    }
-    const result = await pool.query(
-      `INSERT INTO user_locations (user_id, latitude, longitude, location_source, updated_at)
-       VALUES ($1, $2, $3, 'GPS', NOW())
-       ON CONFLICT (user_id) DO UPDATE
-       SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
-           location_source = 'GPS', updated_at = NOW()
-       RETURNING latitude, longitude, updated_at AS "updatedAt"`,
-      [req.user.userId, latitude, longitude]
-    );
-    return res.json({ success: true, location: result.rows[0] });
-  } catch (error: any) {
-    console.error('Save buyer location error:', error);
-    return res.status(500).json({ success: false, error: 'Unable to save your location.' });
-  }
+// Buyer coordinates are transient discovery input; never persist them.
+router.post('/location', authenticateToken, async (_req: AuthenticatedRequest, res: Response) => {
+  return res.status(410).json({ success: false, error: 'Buyer locations are used only for nearby discovery and are not saved.' });
+});
+router.get('/location/me', authenticateToken, async (_req: AuthenticatedRequest, res: Response) => {
+  return res.json({ success: true, location: null });
 });
 
-router.get('/location/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
-    const result = await pool.query(
-      `SELECT latitude, longitude, location_source AS "locationSource", updated_at AS "updatedAt"
-       FROM user_locations WHERE user_id = $1 LIMIT 1`,
-      [req.user.userId]
-    );
-    return res.json({ success: true, location: result.rows[0] || null });
-  } catch (error: any) {
-    console.error('Get buyer location error:', error);
-    return res.status(500).json({ success: false, error: 'Unable to load your saved location.' });
-  }
-});
-
-// ==========================================
 // Seller location verification and listing lifecycle.
 const SELLER_LOCATION_MAX_DISTANCE_METERS = Math.max(1, Number.parseInt(process.env.PAYGO_SELLER_LOCATION_MAX_DISTANCE_METERS || '50', 10) || 50);
 const SELLER_LOCATION_TOLERANCE_METERS = 5;
