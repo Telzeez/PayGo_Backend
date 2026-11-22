@@ -182,6 +182,11 @@ export class MarketplaceService {
       throw new Error('Listing not found or access denied');
     }
 
+    await pool.query(
+      `INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type)
+       SELECT energy_source_id, $2, $3 FROM energy_listings WHERE id = $1`,
+      [listingId, sellerId, status === 'PAUSED' ? 'PAUSED' : 'ACTIVATED']
+    );
     return result.rows[0];
   }
 
