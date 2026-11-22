@@ -136,7 +136,7 @@ router.post('/sources', authenticateToken, async (req: AuthenticatedRequest, res
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
-    const { deviceId, name, latitude, longitude, serviceRadiusMeters } = req.body;
+    const { deviceId, name, latitude, longitude, accuracy, serviceRadiusMeters } = req.body;
 
     if (!deviceId || !name || latitude === undefined || longitude === undefined) {
       return res.status(400).json({
@@ -151,6 +151,7 @@ router.post('/sources', authenticateToken, async (req: AuthenticatedRequest, res
       name,
       latitude: parseFloat(latitude),
       longitude: parseFloat(longitude),
+      accuracy: accuracy === undefined ? undefined : parseFloat(accuracy),
       serviceRadiusMeters: serviceRadiusMeters ? parseInt(serviceRadiusMeters, 10) : 500,
     });
 
