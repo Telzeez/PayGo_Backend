@@ -170,7 +170,8 @@ export class MarketplaceService {
     const result = await pool.query(
       `UPDATE energy_listings
        SET status = $1, updated_at = NOW()
-       WHERE id = $2 AND seller_id = $3
+       WHERE id = $2 AND seller_id = $3 AND status <> 'REVOKED'
+         AND EXISTS (SELECT 1 FROM energy_sources s WHERE s.id = energy_source_id AND s.status = 'ACTIVE')
        RETURNING id, energy_source_id AS "energySourceId", seller_id AS "sellerId",
                  available_kwh AS "availableKwh", reserved_kwh AS "reservedKwh",
                  price_per_kwh AS "pricePerKwh", status, expires_at AS "expiresAt",
@@ -287,9 +288,9 @@ export class MarketplaceService {
     // 3. Price ASC (cheapest first)
     // 4. Available kWh DESC (most energy first)
     nearbyListings.sort((a, b) => {
+      if (a.distanceMeters !== b.distanceMeters) return a.distanceMeters - b.distanceMeters;
       if (a.deviceStatus === 'ONLINE' && b.deviceStatus !== 'ONLINE') return -1;
       if (a.deviceStatus !== 'ONLINE' && b.deviceStatus === 'ONLINE') return 1;
-      if (a.distanceMeters !== b.distanceMeters) return a.distanceMeters - b.distanceMeters;
       if (a.pricePerKwh !== b.pricePerKwh) return a.pricePerKwh - b.pricePerKwh;
       return b.availableKwh - a.availableKwh;
     });
