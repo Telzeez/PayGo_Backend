@@ -23,12 +23,16 @@ export class MarketplaceService {
     name: string;
     latitude: number;
     longitude: number;
+    accuracy?: number;
     serviceRadiusMeters?: number;
   }): Promise<EnergySource> {
-    const { ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters = 500 } = params;
+    const { ownerId, deviceId, name, latitude, longitude, accuracy, serviceRadiusMeters = 500 } = params;
 
     if (!isValidCoordinate(latitude, longitude)) {
       throw new Error('Invalid latitude or longitude coordinates');
+    }
+    if (accuracy !== undefined && (!Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 20)) {
+      throw new Error('Your location signal is not clear enough. Please wait for a more accurate reading.');
     }
 
     if (serviceRadiusMeters <= 0 || serviceRadiusMeters > DEFAULT_PLATFORM_MAX_RADIUS_METERS) {
@@ -56,16 +60,21 @@ export class MarketplaceService {
 
     const result = await pool.query(
       `INSERT INTO energy_sources 
-       (owner_id, device_id, name, latitude, longitude, service_radius_m, status)
-       VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
+       (owner_id, device_id, name, latitude, longitude, service_radius_m, status, location_set_at, location_accuracy_m, location_verified_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', NOW(), $7, NOW())
        RETURNING id, owner_id AS "ownerId", device_id AS "deviceId", name, latitude, longitude,
                  service_radius_m AS "serviceRadiusMeters",
                  max_capacity_w AS "maxCapacityW", max_capacity_va AS "maxCapacityVa",
                  max_surge_va AS "maxSurgeVa", safety_margin_pct AS "safetyMarginPct",
                  status, created_at AS "createdAt", updated_at AS "updatedAt"`,
-      [ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters]
+      [ownerId, deviceId, name, latitude, longitude, serviceRadiusMeters, accuracy ?? null]
     );
 
+    await pool.query(
+      `INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type, latitude, longitude, accuracy_m)
+       VALUES ($1, $2, 'LOCATION_SET', $3, $4, $5)`,
+      [result.rows[0].id, ownerId, latitude, longitude, accuracy ?? null]
+    );
     return result.rows[0];
   }
 
