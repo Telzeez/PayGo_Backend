@@ -51,7 +51,7 @@ router.put('/sources/:id/location', authenticateToken, async (req: Authenticated
     if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
     const sourceId = Number.parseInt(String(req.params.id), 10);
     const checked = await validateSellerLocation(req, sourceId);
-    await pool.query('UPDATE energy_sources SET location_accuracy_m = $1, location_verified_at = NOW(), updated_at = NOW() WHERE id = $2 AND owner_id = $3', [checked.accuracy, sourceId, req.user.userId]);
+    await pool.query('UPDATE energy_sources SET latitude = $1, longitude = $2, location_accuracy_m = $3, location_set_at = NOW(), location_verified_at = NOW(), updated_at = NOW() WHERE id = $4 AND owner_id = $5', [checked.accuracy, sourceId, req.user.userId]);
     await pool.query("INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type, latitude, longitude, accuracy_m, distance_from_previous_m) VALUES ($1, $2, 'LOCATION_UPDATED', $3, $4, $5, $6)", [sourceId, req.user.userId, checked.latitude, checked.longitude, checked.accuracy, checked.distance]);
     return res.json({ success: true, message: 'Your meter location has been verified.', distanceMeters: checked.distance });
   } catch (error: any) { return res.status(400).json({ success: false, error: error.message || 'Unable to verify this location.' }); }
@@ -81,7 +81,7 @@ router.post('/sources/:id/relist', authenticateToken, async (req: AuthenticatedR
     const sourceId = Number.parseInt(String(req.params.id), 10);
     const checked = await validateSellerLocation(req, sourceId);
     await client.query('BEGIN');
-    await client.query("UPDATE energy_sources SET status = 'ACTIVE', location_accuracy_m = $1, location_verified_at = NOW(), updated_at = NOW() WHERE id = $2 AND owner_id = $3", [checked.accuracy, sourceId, req.user.userId]);
+    await client.query("UPDATE energy_sources SET status = 'ACTIVE', latitude = $1, longitude = $2, location_accuracy_m = $3, location_set_at = NOW(), location_verified_at = NOW(), updated_at = NOW() WHERE id = $4 AND owner_id = $5", [checked.latitude, checked.longitude, checked.accuracy, sourceId, req.user.userId]);
     const restored = await client.query("UPDATE energy_listings SET status = 'ACTIVE', updated_at = NOW() WHERE energy_source_id = $1 AND seller_id = $2 AND status = 'REVOKED' RETURNING id", [sourceId, req.user.userId]);
     if (!restored.rows.length) throw new Error('There is no revoked offer to relist. Create a new offer instead.');
     await client.query("INSERT INTO energy_source_location_events (energy_source_id, actor_user_id, event_type, latitude, longitude, accuracy_m, distance_from_previous_m) VALUES ($1, $2, 'RELISTED', $3, $4, $5, $6)", [sourceId, req.user.userId, checked.latitude, checked.longitude, checked.accuracy, checked.distance]);
