@@ -33,6 +33,20 @@ router.get('/location/me', authenticateToken, async (_req: AuthenticatedRequest,
 // Seller location verification and listing lifecycle.
 const SELLER_LOCATION_MAX_DISTANCE_METERS = Math.max(1, Number.parseInt(process.env.PAYGO_SELLER_LOCATION_MAX_DISTANCE_METERS || '50', 10) || 50);
 const SELLER_LOCATION_TOLERANCE_METERS = 5;
+const sellerLocationRequests = new Map<number, { count: number; resetAt: number }>();
+const sellerLocationRateLimit: express.RequestHandler = (req, res, next) => {
+  const userId = (req as AuthenticatedRequest).user?.userId;
+  if (!userId) return res.status(401).json({ success: false, error: 'Authentication required' });
+  const now = Date.now();
+  const current = sellerLocationRequests.get(userId);
+  if (!current || current.resetAt <= now) {
+    sellerLocationRequests.set(userId, { count: 1, resetAt: now + 300_000 });
+    return next();
+  }
+  if (current.count >= 8) return res.status(429).json({ success: false, error: 'Too many location updates. Please wait a few minutes and try again.' });
+  current.count += 1;
+  return next();
+};
 async function validateSellerLocation(req: AuthenticatedRequest, sourceId: number) {
   const latitude = Number(req.body?.latitude), longitude = Number(req.body?.longitude);
   const accuracy = Number(req.body?.accuracy), timestamp = Number(req.body?.ts);
@@ -46,7 +60,7 @@ async function validateSellerLocation(req: AuthenticatedRequest, sourceId: numbe
   if (distance > SELLER_LOCATION_MAX_DISTANCE_METERS + SELLER_LOCATION_TOLERANCE_METERS) throw new Error(`You are about ${distance} m from the saved meter location. Move closer (within ${SELLER_LOCATION_MAX_DISTANCE_METERS} m) and try again.`);
   return { latitude, longitude, accuracy, distance };
 }
-router.put('/sources/:id/location', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.put('/sources/:id/location', authenticateToken, sellerLocationRateLimit, async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
     const sourceId = Number.parseInt(String(req.params.id), 10);
@@ -74,7 +88,7 @@ router.post('/sources/:id/revoke', authenticateToken, async (req: AuthenticatedR
     return res.status(400).json({ success: false, error: error.message || 'Unable to revoke listing.' });
   } finally { client.release(); }
 });
-router.post('/sources/:id/relist', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources/:id/relist', authenticateToken, sellerLocationRateLimit, async (req: AuthenticatedRequest, res: Response) => {
   const client = await pool.connect();
   try {
     if (!req.user) return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -95,7 +109,7 @@ router.post('/sources/:id/relist', authenticateToken, async (req: AuthenticatedR
 
 // 1. REGISTER ENERGY SOURCE (SELLER)
 // ==========================================
-router.post('/sources', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources', authenticateToken, sellerLocationRateLimit, async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
