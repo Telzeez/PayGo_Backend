@@ -1,5 +1,5 @@
 export type SourceStatus = 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'OFFLINE' | 'DECOMMISSIONED';
-export type ListingStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'SOLD_OUT' | 'EXPIRED';
+export type ListingStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'SOLD_OUT' | 'EXPIRED' | 'REVOKED';
 export type PurchaseStatus = 'RESERVED' | 'PAYMENT_PENDING' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
 
 export interface LocationPoint {
