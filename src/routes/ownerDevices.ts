@@ -7,6 +7,20 @@ import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMidd
 const router = express.Router();
 router.use(authenticateToken);
 
+// Keep owner-facing status consistent with the device heartbeat endpoint.
+const HEARTBEAT_TTL_MS = 12_000;
+function getEffectiveDeviceStatus(
+  status: string | null | undefined,
+  lastSeenAt: string | Date | null | undefined
+): 'ONLINE' | 'OFFLINE' {
+  if (status !== 'ONLINE' || !lastSeenAt) return 'OFFLINE';
+  const lastSeenMs = new Date(lastSeenAt).getTime();
+  const ageMs = Date.now() - lastSeenMs;
+  return Number.isFinite(lastSeenMs) && ageMs >= 0 && ageMs <= HEARTBEAT_TTL_MS
+    ? 'ONLINE'
+    : 'OFFLINE';
+}
+
 // Platform-controlled provisioning. The meter must already exist in the device registry.
 router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Response) => {
   if (req.user?.role !== 'ADMIN') {
@@ -260,6 +274,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
       devices: result.rows.map((row: any) => ({
         ...row,
         balance: Number(row.balance || 0),
+        status: getEffectiveDeviceStatus(row.status, row.lastSeenAt),
       })),
     });
   } catch (error: any) {
@@ -426,7 +441,7 @@ router.get('/:deviceId', async (req: AuthenticatedRequest, res: Response) => {
       success: true,
       deviceId: row.deviceId,
       balance: Number(row.balance || 0),
-      status: row.status || 'OFFLINE',
+      status: getEffectiveDeviceStatus(row.status, row.lastSeenAt),
       lastSeenAt: row.lastSeenAt,
       lastUpdated: row.lastUpdated,
       transactions: txResult.rows.map((tx: any) => ({
