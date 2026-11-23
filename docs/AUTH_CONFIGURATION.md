@@ -10,6 +10,8 @@ Configure these variables before deploying the authentication changes.
 - `GMAIL_OAUTH_REFRESH_TOKEN`: offline refresh token authorized for the `https://www.googleapis.com/auth/gmail.send` scope.
 - `GMAIL_SENDER_EMAIL`: the Gmail address that authorized the Gmail API and will send PAYGO messages.
 - `APP_BASE_URL`: public frontend origin, currently `https://pay-go-frontend.vercel.app`.
+- `FRONTEND_URL`: optional explicit frontend origin for payment callbacks; if omitted, `APP_BASE_URL` is used.
+- `ALLOWED_ORIGINS`: optional comma-separated list of additional exact browser origins (for example, temporary Vercel preview origins).
 - `DATABASE_URL`: existing PostgreSQL connection string.
 - `JWT_SECRET`: a long, randomly generated secret. Do not use the development fallback in production.
 
@@ -48,3 +50,14 @@ In Google Cloud Console, configure the OAuth consent screen and add the deployed
 - Google sign-in verifies Google's ID token and verified-email claim. A first-time Google user is created automatically; Google-verified email addresses do not receive a second verification email.
 
 The Gmail API send endpoint is called over HTTPS. No SMTP connection or custom sending domain is required. The database migration `20261120_email_verification.sql` is applied by backend startup; do not manually edit production tables to add these columns if the migration has already run.
+
+
+## Device API authentication and administrator access
+
+- The administrator dashboard requires a PAYGO user whose database role is exactly `ADMIN`. Public registration and capability activation must never grant this role. Grant it only through a trusted database administration process.
+- Device status, balance and token inspection endpoints require an authenticated administrator.
+- ESP32 heartbeat, balance update, ACK, energy report and token redemption endpoints require a unique per-device `X-Device-API-Key` header.
+- Generate or rotate a device key from the administrator dashboard. The raw key is displayed once; the backend stores only its SHA-256 hash.
+- Put the key in that meter's local, ignored `src/DeviceConfig.h` as `PAYGO_DEVICE_API_KEY`, then reflash the ESP32. Never commit the local config or reuse a key across meters.
+- Rotating a key immediately invalidates the old key. Reflash the meter with the new key before expecting its HTTPS heartbeat to work again.
+- Deploy the backend and matching firmware together. Older firmware without the header will receive HTTP 401 responses.
