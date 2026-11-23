@@ -1,19 +1,8 @@
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
-import bcrypt from 'bcrypt';
-import { sendSms } from '../services/sms.js';
 import { PaystackWebhookEvent } from '../types/index.js';
 import { processSuccessfulPayment } from '../services/paymentProcessor.js';
-import mqttService from '../mqtt-client.js';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
 const router = express.Router();
-
-const SALT_ROUNDS: number = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10);
-const TOKEN_EXPIRY_HOURS: number = parseInt(process.env.TOKEN_EXPIRY_HOURS || '72', 10);
-const PRICE_PER_KWH: number = parseFloat(process.env.PRICE_PER_KWH || '200');
 
 router.post('/paystack', async (req: Request, res: Response) => {
   const secret = process.env.PAYSTACK_SECRET_KEY || '';
