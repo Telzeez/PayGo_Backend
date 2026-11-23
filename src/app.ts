@@ -21,6 +21,7 @@ const allowedOrigins = new Set([
   'https://pay-go-frontend.vercel.app',
   'http://localhost:3000',
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+  ...(process.env.APP_BASE_URL ? [process.env.APP_BASE_URL] : []),
   ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
 ].map((origin) => origin.replace(/\/+$/, '')));
 
