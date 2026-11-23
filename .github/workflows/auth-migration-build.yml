@@ -22,7 +22,7 @@ jobs:
       - name: Apply compatible dependency security updates
         run: |
           npm uninstall crypto
-          npm audit fix
+          npm update
       - name: Enforce dependency security audit
         run: npm audit --audit-level=moderate
       - run: npm run type-check
