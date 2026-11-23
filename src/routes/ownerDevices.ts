@@ -8,7 +8,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // Keep owner-facing status consistent with the device heartbeat endpoint.
-const HEARTBEAT_TTL_MS = 12_000;
+const HEARTBEAT_TTL_MS = 30_000;
 function getEffectiveDeviceStatus(
   status: string | null | undefined,
   lastSeenAt: string | Date | null | undefined
@@ -348,7 +348,7 @@ router.post('/:deviceId/reset-balance', async (req: AuthenticatedRequest, res: R
 
     const meter = result.rows[0];
     const isFresh = meter.lastSeenAt &&
-      Date.now() - new Date(meter.lastSeenAt).getTime() <= 12000;
+      Date.now() - new Date(meter.lastSeenAt).getTime() <= 30_000;
     if (meter.status !== 'ONLINE' || !isFresh) {
       await client.query(
         `UPDATE devices SET status = 'OFFLINE'

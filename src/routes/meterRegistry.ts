@@ -9,6 +9,15 @@ router.use(authenticateToken);
 const validDeviceId = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(value.trim());
 
+// Match the owner dashboard's heartbeat freshness rule for both owned and buyer-linked meters.
+const HEARTBEAT_TTL_MS = 30_000;
+function getEffectiveDeviceStatus(status: string | null | undefined, lastSeenAt: string | Date | null | undefined): 'ONLINE' | 'OFFLINE' {
+  if (status !== 'ONLINE' || !lastSeenAt) return 'OFFLINE';
+  const lastSeenMs = new Date(lastSeenAt).getTime();
+  const ageMs = Date.now() - lastSeenMs;
+  return Number.isFinite(lastSeenMs) && ageMs >= 0 && ageMs <= HEARTBEAT_TTL_MS ? 'ONLINE' : 'OFFLINE';
+}
+
 // A registered meter can only be claimed for the purpose provisioned in the registry.
 // The client never chooses or changes a meter's purpose.
 router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
@@ -192,8 +201,8 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
     ]);
     return res.setHeader('Cache-Control', 'no-store').json({
       success: true,
-      ownedMeters: owned.rows.map((row: any) => ({ ...row, balance: Number(row.balance || 0) })),
-      customerMeters: customer.rows.map((row: any) => ({ ...row, balance: Number(row.balance || 0) }))
+      ownedMeters: owned.rows.map((row: any) => ({ ...row, balance: Number(row.balance || 0), status: getEffectiveDeviceStatus(row.status, row.lastSeenAt) })),
+      customerMeters: customer.rows.map((row: any) => ({ ...row, balance: Number(row.balance || 0), status: getEffectiveDeviceStatus(row.status, row.lastSeenAt) }))
     });
   } catch (error) {
     console.error('Meter inventory error:', error);

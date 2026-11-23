@@ -44,10 +44,9 @@ router.get('/:deviceId', authenticateToken, requireAdmin, async (req: Request, r
     const lastSeenAt = balanceResult.rows[0].last_seen_at;
     const lastUpdated = balanceResult.rows[0].last_updated;
 
-    // OFFLINE staleness check — if the device hasn't sent a heartbeat in >30s
-    // it is effectively offline even if the DB row still says ONLINE.
-    // OFFLINE staleness threshold — reduced to 12s for fast offline detection
-    const HEARTBEAT_TTL_MS = 12_000;
+    // A meter heartbeats every five seconds. Allow for HTTPS latency and the
+    // sequential balance-sync request before declaring it offline.
+    const HEARTBEAT_TTL_MS = 30_000;
     let status = rawStatus;
     if (rawStatus === 'ONLINE') {
       const msAgo = lastSeenAt
