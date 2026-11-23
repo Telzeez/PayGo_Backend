@@ -57,6 +57,7 @@ The Gmail API send endpoint is called over HTTPS. No SMTP connection or custom s
 The backend CI also runs `npm audit --audit-level=moderate`; dependency updates must keep this check clean.
 
 - The administrator dashboard requires a PAYGO user whose database role is exactly `ADMIN`. Public registration and capability activation must never grant this role. Grant it only through a trusted database administration process.
+- Firebase MFA is not yet enforced by the PAYGO admin sign-in flow. Add and test an MFA challenge flow before treating administrator authentication as production-complete; do not expose any public role-promotion endpoint.
 - Device status, balance and token inspection endpoints require an authenticated administrator.
 - ESP32 heartbeat, balance update, ACK, energy report and token redemption endpoints require a unique per-device `X-Device-API-Key` header.
 - Generate or rotate a device key from the administrator dashboard. The raw key is displayed once; the backend stores only its SHA-256 hash.
