@@ -129,6 +129,45 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
   }
 });
 
+
+/**
+ * Rotate a physical meter's API credential. The raw key is returned exactly
+ * once; only its SHA-256 hash is persisted. The device must be reflashed with
+ * the new key before its next HTTPS heartbeat.
+ */
+router.post('/:deviceId/rotate-api-key', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.role !== 'ADMIN') {
+    return res.status(403).json({ success: false, error: 'Administrator access required.' });
+  }
+
+  const deviceId = String(req.params.deviceId || '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId)) {
+    return res.status(400).json({ success: false, error: 'Invalid meter ID.' });
+  }
+
+  try {
+    const deviceApiKey = crypto.randomBytes(32).toString('base64url');
+    const keyHash = crypto.createHash('sha256').update(deviceApiKey).digest('hex');
+    const updated = await pool.query(
+      'UPDATE devices SET device_api_key_hash = $2, last_updated = NOW() WHERE device_id = $1 RETURNING device_id',
+      [deviceId, keyHash]
+    );
+    if (updated.rowCount !== 1) {
+      return res.status(404).json({ success: false, error: 'Meter not found in the PAYGO device registry.' });
+    }
+
+    return res.json({
+      success: true,
+      deviceId,
+      deviceApiKey,
+      message: 'Copy this key now and store it securely in this meter’s local DeviceConfig.h. It will not be shown again.',
+    });
+  } catch (error) {
+    console.error('Device API key rotation failed:', error);
+    return res.status(500).json({ success: false, error: 'Unable to rotate the meter API key.' });
+  }
+});
+
 // Owner activates only a meter that the platform has already assigned to their account.
 router.post('/activate', async (req: AuthenticatedRequest, res: Response) => {
   const ownerId = req.user!.userId;

@@ -21,20 +21,41 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.11"
 
       - name: Run Semgrep Community Edition
         run: |
-          python -m pip install semgrep
+          python -m pip install semgrep==1.186.0
           semgrep scan --config auto --sarif --output semgrep.sarif
 
+      - name: Print actionable Semgrep findings
+        if: always() && hashFiles('semgrep.sarif') != ''
+        run: |
+          python - <<'PY'
+          import json
+          with open("semgrep.sarif", encoding="utf-8") as source:
+              report = json.load(source)
+          findings = []
+          for run in report.get("runs", []):
+              for finding in run.get("results", []):
+                  location = finding.get("locations", [{}])[0].get("physicalLocation", {})
+                  artifact = location.get("artifactLocation", {}).get("uri", "unknown")
+                  line = location.get("region", {}).get("startLine", "?")
+                  message = finding.get("message", {}).get("text", "").replace("\n", " ")
+                  findings.append(f"{finding.get('level', 'warning')} {finding.get('ruleId')} {artifact}:{line} {message}")
+          for finding in findings:
+              print(finding)
+          if findings:
+              raise SystemExit(f"Semgrep found {len(findings)} finding(s); resolve or explicitly suppress them.")
+          PY
+
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea
         if: hashFiles('semgrep.sarif') != ''
         with:
           sarif_file: semgrep.sarif

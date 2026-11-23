@@ -6,6 +6,8 @@ import app from '../app.js';
 import pool from '../db.js';
 import axios from 'axios';
 
+process.env.PAYSTACK_SECRET_KEY ||= 'sk_test_89821baac945f63f2e385317afa688602a5f3683';
+
 let server: http.Server;
 let baseUrl: string;
 
@@ -322,54 +324,50 @@ describe('PAYGO API Endpoint Test Suite', () => {
   });
 
   // ==========================================
-  // 5. DEVICE PROFILE ENDPOINT
+  // 5. DEVICE ENDPOINT ACCESS CONTROL
   // ==========================================
-  describe('GET /api/devices/:deviceId', () => {
-    it('should return 400 Bad Request if deviceId is invalid or too short', async () => {
-      const res = await fetch(`${baseUrl}/api/devices/ab`); // length < 3
-      assert.equal(res.status, 400);
-
-      const body = await res.json() as any;
-      assert.equal(body.success, false);
-      assert.equal(body.error, 'Invalid device ID specification');
+  describe('DEVICE ENDPOINT ACCESS CONTROL', () => {
+    it('requires an authenticated administrator for platform device details', async () => {
+      const res = await fetch(`${baseUrl}/api/devices/device_001`);
+      assert.equal(res.status, 401);
     });
 
-    it('should return device balance and recent transactions for valid deviceId', async () => {
-      const originalConnect = pool.connect;
-      const mockBalance = '25.50';
-      const mockLastUpdated = new Date().toISOString();
-      const mockTxRows = [
-        { id: 1, type: 'topup', amount: 25.5, timestamp: new Date().toISOString() },
-      ];
+    it('requires an authenticated administrator for device token records', async () => {
+      const res = await fetch(`${baseUrl}/api/devices/device_001/tokens`);
+      assert.equal(res.status, 401);
+    });
 
-      (pool as any).connect = async () => ({
-        query: async (queryText: string) => {
-          if (queryText.includes('INSERT INTO devices')) {
-            return {
-              rows: [{ current_balance: mockBalance, status: 'ONLINE', last_seen_at: mockLastUpdated, last_updated: mockLastUpdated }],
-            };
-          }
-          if (queryText.includes('SELECT id, type, amount')) {
-            return { rows: mockTxRows };
-          }
-          return { rows: [] };
-        },
-        release: () => {},
+    it('requires an authenticated administrator for device balance reads', async () => {
+      const res = await fetch(`${baseUrl}/api/devices/device_001/balance`);
+      assert.equal(res.status, 401);
+    });
+
+    it('rejects hardware balance updates without a device API key', async () => {
+      const res = await fetch(`${baseUrl}/api/devices/device_001/balance`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ balance: 10 }),
       });
+      assert.equal(res.status, 401);
+    });
 
-      try {
-        const res = await fetch(`${baseUrl}/api/devices/device_001`);
-        assert.equal(res.status, 200);
+    it('rejects hardware heartbeats without a device API key', async () => {
+      const res = await fetch(`${baseUrl}/api/devices/device_001/heartbeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remaining_balance: 10 }),
+      });
+      assert.equal(res.status, 401);
+    });
 
-        const body = await res.json() as any;
-        assert.equal(body.success, true);
-        assert.equal(body.deviceId, 'device_001');
-        assert.equal(body.balance, 25.5);
-        assert.equal(body.status, 'ONLINE');
-        assert.ok(Array.isArray(body.transactions));
-      } finally {
-        pool.connect = originalConnect;
-      }
+    it('rejects hardware ACKs, energy reports and token redemption without a device API key', async () => {
+      const requests = [
+        fetch(`${baseUrl}/api/devices/device_001/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactionId: 'tx-1', status: 'ACCEPTED' }) }),
+        fetch(`${baseUrl}/api/devices/device_001/energy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wh_consumed: 10 }) }),
+        fetch(`${baseUrl}/api/devices/device_001/redeem`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: '1234567890123456' }) }),
+      ];
+      const responses = await Promise.all(requests);
+      assert.deepEqual(responses.map((response) => response.status), [401, 401, 401]);
     });
   });
 

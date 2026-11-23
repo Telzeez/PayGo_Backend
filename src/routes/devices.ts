@@ -3,12 +3,13 @@ import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import pool from '../db.js';
 import { Device, Transaction } from '../types/index.js';
+import { authenticateDevice, authenticateToken, requireAdmin } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
 // Legacy unauthenticated database reset endpoints were removed.
 
-router.get('/:deviceId', async (req: Request, res: Response) => {
+router.get('/:deviceId', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   let client;
 
@@ -121,7 +122,7 @@ router.get('/:deviceId', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/:deviceId/tokens', async (req: Request, res: Response) => {
+router.get('/:deviceId/tokens', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
     const deviceId = req.params.deviceId as string;
 
@@ -165,7 +166,7 @@ router.get('/:deviceId/tokens', async (req: Request, res: Response) => {
  */
 
 // Balance Retrieval: GET /api/devices/:deviceId/balance
-router.get('/:deviceId/balance', async (req: Request, res: Response) => {
+router.get('/:deviceId/balance', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
     const deviceId = req.params.deviceId as string;
     if (!deviceId) {
@@ -300,14 +301,14 @@ const handleBalanceUpdate = async (req: Request, res: Response) => {
   }
 };
 
-router.put('/:deviceId/balance', handleBalanceUpdate);
-router.post('/:deviceId/balance', handleBalanceUpdate);
+router.put('/:deviceId/balance', authenticateDevice, handleBalanceUpdate);
+router.post('/:deviceId/balance', authenticateDevice, handleBalanceUpdate);
 
 // 1. Heartbeat / Sync: Hardware reports its remaining balance (hardware is authoritative).
 //    - If the device sends `remaining_balance`, it is written directly to current_balance.
 //    - On first boot (no NVS), the firmware omits remaining_balance so the server seeds it.
 //    - pendingCredits (new top-ups) flow back down so the hardware can apply them locally.
-router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
+router.post('/:deviceId/heartbeat', authenticateDevice, async (req: Request, res: Response) => {
   try {
     const deviceId = req.params.deviceId as string;
     const { remaining_balance, ackBalanceReset } = req.body;
@@ -395,7 +396,7 @@ router.post('/:deviceId/heartbeat', async (req: Request, res: Response) => {
 });
 
 // 2. Hardware Credit ACK via HTTP
-router.post('/:deviceId/ack', async (req: Request, res: Response) => {
+router.post('/:deviceId/ack', authenticateDevice, async (req: Request, res: Response) => {
   try {
     const deviceId = req.params.deviceId as string;
     const { transactionId, status, reason } = req.body;
@@ -430,7 +431,7 @@ router.post('/:deviceId/ack', async (req: Request, res: Response) => {
 });
 
 // 3. Energy Consumption Report via HTTP
-router.post('/:deviceId/energy', async (req: Request, res: Response) => {
+router.post('/:deviceId/energy', authenticateDevice, async (req: Request, res: Response) => {
   const deviceId = req.params.deviceId as string;
   const { wh_consumed } = req.body;
 
@@ -487,7 +488,7 @@ router.post('/:deviceId/energy', async (req: Request, res: Response) => {
 });
 
 // 4. Keypad Token Redemption via HTTP
-router.post('/:deviceId/redeem', async (req: Request, res: Response) => {
+router.post('/:deviceId/redeem', authenticateDevice, async (req: Request, res: Response) => {
   const deviceId = req.params.deviceId as string;
   const { code } = req.body;
 
