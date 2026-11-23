@@ -36,8 +36,8 @@ router.post('/paystack', async (req: Request, res: Response) => {
         return res.status(400).send('Invalid payment event');
       }
 
-      await processSuccessfulPayment(reference, buyerEmail, amountPaid, deviceId);
-      return res.status(200).send('Webhook processed');
+      const processed = await processSuccessfulPayment(reference, buyerEmail, amountPaid, deviceId);
+      return res.status(200).send(processed ? 'Webhook processed' : 'Webhook already processed');
     }
 
     return res.status(200).send('Event ignored');
