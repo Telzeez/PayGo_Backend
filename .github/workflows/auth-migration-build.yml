@@ -21,8 +21,9 @@ jobs:
       - run: npm ci
       - name: Apply compatible dependency security updates
         run: |
+          npm install --global npm@11
           npm uninstall crypto
-          npm update
+          npm audit fix
       - name: Enforce dependency security audit
         run: npm audit --audit-level=moderate
       - run: npm run type-check
