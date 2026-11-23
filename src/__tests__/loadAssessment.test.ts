@@ -8,7 +8,7 @@ const catalogue = [
 ];
 
 describe('PAYGO customer load assessment', () => {
-  it('calculates simultaneous load, apparent power and conservative starting surge with margin', () => {
+  it('calculates connected load, simultaneous demand, apparent power and starting surge with margin', () => {
     const result = calculateLoadAssessment([
       { applianceId: 1, quantity: 4, simultaneousQuantity: 4 },
       { applianceId: 2, quantity: 1, simultaneousQuantity: 1 },
@@ -21,21 +21,19 @@ describe('PAYGO customer load assessment', () => {
     assert.equal(result.requestedStartingSurgeVa, 953.33);
   });
 
-  it('uses simultaneous quantity for demand, not the full installed quantity', () => {
+  it('uses simultaneous quantity rather than the full installed quantity', () => {
     const result = calculateLoadAssessment([
       { applianceId: 1, quantity: 5, simultaneousQuantity: 2 },
     ], catalogue, 0);
-
     assert.equal(result.connectedPowerW, 50);
     assert.equal(result.simultaneousPowerW, 20);
     assert.equal(result.requestedPowerW, 20);
   });
 
-  it('allows a customer to override catalogue wattage with the appliance nameplate rating', () => {
+  it('accepts a nameplate wattage override', () => {
     const result = calculateLoadAssessment([
       { applianceId: 1, quantity: 2, simultaneousQuantity: 2, ratedPowerOverrideW: 18 },
     ], catalogue, 0);
-
     assert.equal(result.connectedPowerW, 36);
     assert.equal(result.requestedPowerW, 36);
   });
@@ -50,9 +48,19 @@ describe('PAYGO customer load assessment', () => {
     ], catalogue, 0));
   });
 
-  it('rejects invalid safety margins', () => {
+  it('rejects invalid safety margins and an empty appliance selection', () => {
     assert.throws(() => calculateLoadAssessment([
       { applianceId: 1, quantity: 1, simultaneousQuantity: 1 },
     ], catalogue, 101));
+    assert.throws(() => calculateLoadAssessment([], catalogue, 10));
+  });
+
+  it('rejects invalid custom appliance wattage', () => {
+    assert.throws(() => calculateLoadAssessment([
+      { applianceId: 1, quantity: 1, simultaneousQuantity: 1, ratedPowerOverrideW: 0 },
+    ], catalogue, 0));
+    assert.throws(() => calculateLoadAssessment([
+      { applianceId: 1, quantity: 1, simultaneousQuantity: 1, ratedPowerOverrideW: 50001 },
+    ], catalogue, 0));
   });
 });
