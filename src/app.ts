@@ -1,7 +1,7 @@
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { notFoundError, globalError, requestLogger } from './middlewares/middleware.js';
+import { notFoundError, globalError, requestLogger, apiRateLimit } from './middlewares/middleware.js';
 import authRoutes from './routes/auth.js';
 import webhookRoutes from './routes/webhook.js';
 import paymentRoutes from './routes/payment.js';
@@ -14,8 +14,37 @@ import connectionRoutes from './routes/connections.js';
 
 dotenv.config();
 const app: Express = express();
-app.use(cors());
-app.use(express.json({
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+const allowedOrigins = new Set([
+  'https://pay-go-frontend.vercel.app',
+  'http://localhost:3000',
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+  ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
+].map((origin) => origin.replace(/\\/+$/, '')));
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Non-browser clients and provider webhooks do not send an Origin header.
+    if (!origin || allowedOrigins.has(origin.replace(/\\/+$/, ''))) return callback(null, true);
+    return callback(new Error('Origin is not allowed by the PAYGO CORS policy'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-API-Key', 'X-Paystack-Signature'],
+  maxAge: 600,
+}));
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
+app.use(express.json({ limit: '64kb',
   verify: (req: any, _res, buf) => {
     if (buf && buf.length) req.rawBody = buf;
   },
@@ -26,6 +55,7 @@ app.use(requestLogger);
 // Maintenance mode is opt-in. Normal API access remains enabled unless
 // PAYGO_MAINTENANCE_MODE=true is explicitly configured.
 const maintenanceMode = process.env.PAYGO_MAINTENANCE_MODE === 'true';
+app.use('/api', apiRateLimit);
 app.use('/api', (req: Request, res: Response, next) => {
   if (!maintenanceMode || req.path === '/webhook/paystack') {
     return next();
