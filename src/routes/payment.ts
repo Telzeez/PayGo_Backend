@@ -30,7 +30,7 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
     }
 
     // Never derive a payment callback from the caller-controlled Origin/Referer headers.
-    const configuredFrontendUrl = process.env.FRONTEND_URL ||
+    const configuredFrontendUrl = process.env.FRONTEND_URL || process.env.APP_BASE_URL ||
       (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
     if (!configuredFrontendUrl) {
       console.error('FRONTEND_URL must be configured before initiating payments in production.');
