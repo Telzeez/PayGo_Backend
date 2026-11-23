@@ -6,6 +6,8 @@ import app from '../app.js';
 import pool from '../db.js';
 import axios from 'axios';
 
+process.env.PAYSTACK_SECRET_KEY ||= 'sk_test_89821baac945f63f2e385317afa688602a5f3683';
+
 let server: http.Server;
 let baseUrl: string;
 
