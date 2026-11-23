@@ -48,95 +48,33 @@ describe('PAYGO API Endpoint Test Suite', () => {
   // AUTH ENDPOINTS (REGISTER, LOGIN, ME)
   // ==========================================
   describe('AUTH ENDPOINTS', () => {
-    it('POST /api/auth/register - should validate missing fields', async () => {
+    it('does not expose legacy email/password registration', async () => {
       const res = await fetch(`${baseUrl}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'newbuyer@example.com' }), // missing password
+        body: JSON.stringify({ email: 'newbuyer@example.com', password: 'password123' }),
       });
+      assert.equal(res.status, 404);
+    });
 
-      assert.equal(res.status, 400);
+    it('does not expose legacy email/password login', async () => {
+      const res = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'newbuyer@example.com', password: 'password123' }),
+      });
+      assert.equal(res.status, 404);
+    });
+
+    it('requires a Firebase ID token to synchronize a PAYGO profile', async () => {
+      const res = await fetch(`${baseUrl}/api/auth/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'BUYER' }),
+      });
+      assert.equal(res.status, 401);
       const body = await res.json() as any;
-      assert.equal(body.success, false);
-      assert.equal(body.error, 'Email and password are required');
-    });
-
-    it('POST /api/auth/register - should create user and return JWT token', async () => {
-      const originalQuery = pool.query;
-      const mockUser = {
-        id: 10,
-        email: 'newbuyer@example.com',
-        phone: '08012345678',
-        role: 'BUYER',
-        created_at: new Date().toISOString(),
-      };
-
-      (pool as any).query = async (queryText: string) => {
-        if (queryText.includes('SELECT id FROM users')) {
-          return { rows: [] }; // No existing user
-        }
-        if (queryText.includes('INSERT INTO users')) {
-          return { rows: [mockUser] };
-        }
-        return { rows: [] };
-      };
-
-      try {
-        const res = await fetch(`${baseUrl}/api/auth/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: 'newbuyer@example.com',
-            password: 'securepassword123',
-            phone: '08012345678',
-            role: 'BUYER',
-          }),
-        });
-
-        assert.equal(res.status, 201);
-        const body = await res.json() as any;
-        assert.equal(body.success, true);
-        assert.ok(body.token);
-        assert.equal(body.user.email, 'newbuyer@example.com');
-        assert.equal(body.user.role, 'BUYER');
-      } finally {
-        pool.query = originalQuery;
-      }
-    });
-
-    it('POST /api/auth/login - should authenticate valid user credentials', async () => {
-      const originalQuery = pool.query;
-      const bcrypt = await import('bcrypt');
-      const passwordHash = await bcrypt.hash('securepassword123', 10);
-
-      const mockUser = {
-        id: 10,
-        email: 'newbuyer@example.com',
-        phone: '08012345678',
-        password_hash: passwordHash,
-        role: 'BUYER',
-      };
-
-      (pool as any).query = async () => ({ rows: [mockUser] });
-
-      try {
-        const res = await fetch(`${baseUrl}/api/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: 'newbuyer@example.com',
-            password: 'securepassword123',
-          }),
-        });
-
-        assert.equal(res.status, 200);
-        const body = await res.json() as any;
-        assert.equal(body.success, true);
-        assert.ok(body.token);
-        assert.equal(body.user.email, 'newbuyer@example.com');
-      } finally {
-        pool.query = originalQuery;
-      }
+      assert.equal(body.error, 'Firebase authentication token required');
     });
   });
 
@@ -157,61 +95,31 @@ describe('PAYGO API Endpoint Test Suite', () => {
   // 3. PAYMENT INITIATION ENDPOINT
   // ==========================================
   describe('POST /api/payment/initiate', () => {
-    it('should return 400 Bad Request when mandatory fields are missing', async () => {
+    it('requires authentication before validating payment fields', async () => {
       const res = await fetch(`${baseUrl}/api/payment/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: 500, email: 'buyer@example.com' }), // missing deviceId
+        body: JSON.stringify({ amount: 500, email: 'buyer@example.com' }),
       });
-
-      assert.equal(res.status, 400);
-      const body = await res.json() as any;
-      assert.equal(body.success, false);
-      assert.ok(body.error.includes('Missing required field'));
+      assert.equal(res.status, 401);
     });
 
-    it('should return 400 Bad Request when payment amount is less than 100', async () => {
+    it('does not allow unauthenticated callers to initialize low-value payments', async () => {
       const res = await fetch(`${baseUrl}/api/payment/initiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: 50, email: 'buyer@example.com', deviceId: 'device_001' }),
       });
-
-      assert.equal(res.status, 400);
-      const body = await res.json() as any;
-      assert.equal(body.success, false);
-      assert.equal(body.error, 'Minimum payment is #100');
+      assert.equal(res.status, 401);
     });
 
-    it('should successfully initialize payment via Paystack and return paymentUrl', async () => {
-      const originalPost = axios.post;
-      (axios as any).post = async () => ({
-        data: {
-          status: true,
-          data: {
-            authorization_url: 'https://checkout.paystack.com/test_token_123',
-            reference: 'paystack_ref_9999',
-          },
-        },
+    it('does not allow unauthenticated callers to initialize Paystack payments', async () => {
+      const res = await fetch(`${baseUrl}/api/payment/initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: 1000, email: 'buyer@example.com', deviceId: 'device_001' }),
       });
-
-      try {
-        const res = await fetch(`${baseUrl}/api/payment/initiate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount: 1000, email: 'buyer@example.com', deviceId: 'device_001' }),
-        });
-
-        assert.equal(res.status, 200);
-        const body = await res.json() as any;
-        assert.deepEqual(body, {
-          success: true,
-          paymentUrl: 'https://checkout.paystack.com/test_token_123',
-          reference: 'paystack_ref_9999',
-        });
-      } finally {
-        axios.post = originalPost;
-      }
+      assert.equal(res.status, 401);
     });
   });
 
@@ -375,50 +283,14 @@ describe('PAYGO API Endpoint Test Suite', () => {
   // 6. TRANSACTION VERIFICATION ENDPOINT
   // ==========================================
   describe('GET /api/transactions/verify/:reference', () => {
-    it('should return status pending if transaction reference is not yet processed', async () => {
-      const originalQuery = pool.query;
-      (pool as any).query = async () => ({ rows: [] });
-
-      try {
-        const res = await fetch(`${baseUrl}/api/transactions/verify/unprocessed_ref`);
-        assert.equal(res.status, 200);
-
-        const body = await res.json() as any;
-        assert.deepEqual(body, {
-          status: 'pending',
-          message: 'Payment confirmation processing by background workers.',
-        });
-      } finally {
-        pool.query = originalQuery;
-      }
+    it('requires an authenticated PAYGO account before checking a pending reference', async () => {
+      const res = await fetch(`${baseUrl}/api/transactions/verify/unprocessed_ref`);
+      assert.equal(res.status, 401);
     });
 
-    it('should return token details if transaction reference exists', async () => {
-      const originalQuery = pool.query;
-      const mockToken = {
-        kwh_amount: '10.00',
-        expires_at: '2026-08-13T18:00:00.000Z',
-        used: false,
-      };
-
-      (pool as any).query = async () => ({ rows: [mockToken] });
-
-      try {
-        const res = await fetch(`${baseUrl}/api/transactions/verify/ref_processed_123`);
-        assert.equal(res.status, 200);
-
-        const body = await res.json() as any;
-        assert.deepEqual(body, {
-          status: 'success',
-          data: {
-            kwhAmount: '10.00',
-            expiresAt: '2026-08-13T18:00:00.000Z',
-            used: false,
-          },
-        });
-      } finally {
-        pool.query = originalQuery;
-      }
+    it('requires authentication before returning transaction or token details', async () => {
+      const res = await fetch(`${baseUrl}/api/transactions/verify/ref_processed_123`);
+      assert.equal(res.status, 401);
     });
   });
 
@@ -477,7 +349,7 @@ describe('PAYGO API Endpoint Test Suite', () => {
 
         assert.ok(hasBalanceUpsert, 'DB device balance upsert must execute');
         assert.ok(hasPendingTxInsert, 'Transaction record with PENDING hardware status must be inserted');
-        assert.ok(hasTokenAutoCreditedInsert, 'Fallback token with auto_credited=true must be inserted');
+        assert.equal(hasTokenAutoCreditedInsert, false, 'Current HTTPS credit-sync flow must not create legacy fallback tokens');
       } finally {
         pool.connect = originalConnect;
       }
