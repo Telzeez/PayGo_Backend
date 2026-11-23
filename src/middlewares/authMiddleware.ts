@@ -238,7 +238,7 @@ export const authenticateDevice = async (
     );
     const storedHash = result.rows[0]?.device_api_key_hash as string | undefined;
     if (!storedHash || !/^[a-f0-9]{64}$/i.test(storedHash)) {
-      return res.status(401).json({ success: false, error: 'Device is not configured for authenticated API access.' });
+      return res.status(401).json({ success: false, error: 'Invalid device credentials.' });
     }
 
     const suppliedHash = createHash('sha256').update(suppliedKey).digest();
