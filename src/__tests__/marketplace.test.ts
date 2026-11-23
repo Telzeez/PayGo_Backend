@@ -8,69 +8,62 @@ import {
 } from '../services/location.js';
 
 describe('PAYGO Marketplace Location Matching & Business Rules Test Suite', () => {
-  it('should validate coordinates correctly', () => {
+  it('validates latitude and longitude boundaries', () => {
     assert.equal(isValidCoordinate(7.44, 3.9), true);
-    assert.equal(isValidCoordinate(0, 0), true);
+    assert.equal(isValidCoordinate(90, 180), true);
+    assert.equal(isValidCoordinate(-90, -180), true);
     assert.equal(isValidCoordinate(91, 3.9), false);
     assert.equal(isValidCoordinate(-91, 3.9), false);
     assert.equal(isValidCoordinate(7.44, 181), false);
     assert.equal(isValidCoordinate(7.44, -181), false);
     assert.equal(isValidCoordinate(NaN, 3.9), false);
+    assert.equal(isValidCoordinate('7.44' as any, 3.9), false);
   });
 
-  it('should calculate 0 meters for identical coordinates', () => {
-    const distance = calculateHaversineDistance(7.44, 3.9, 7.44, 3.9);
-    assert.equal(distance, 0);
+  it('returns zero metres for identical coordinates', () => {
+    assert.equal(calculateHaversineDistance(7.44, 3.9, 7.44, 3.9), 0);
   });
 
-  it('should calculate accurate distance for nearby points (~180m)', () => {
-    // 7.4400, 3.9000 to 7.4416, 3.9000 is ~178 meters
+  it('calculates a short local distance of approximately 178 metres', () => {
     const distance = calculateHaversineDistance(7.44, 3.9, 7.4416, 3.9);
-    assert.ok(distance >= 170 && distance <= 190, `Distance should be ~178m, got ${distance}m`);
+    assert.ok(distance >= 170 && distance <= 190, `Expected approximately 178m, got ${distance}m`);
   });
 
-  it('should calculate accurate distance for distant points (~1.8km)', () => {
-    // 7.4400, 3.9000 to 7.4560, 3.9000 is ~1779 meters
+  it('calculates a longer local distance of approximately 1.78 kilometres', () => {
     const distance = calculateHaversineDistance(7.44, 3.9, 7.456, 3.9);
-    assert.ok(distance >= 1700 && distance <= 1850, `Distance should be ~1.78km, got ${distance}m`);
+    assert.ok(distance >= 1700 && distance <= 1850, `Expected approximately 1.78km, got ${distance}m`);
   });
 
-  it('should calculate effective radius correctly: MIN(buyerRadius, sellerRadius, platformMax)', () => {
-    // Buyer: 1000m, Seller: 500m, Platform: 5000m -> Effective: 500m
-    const radius1 = calculateEffectiveRadius(1000, 500, 5000);
-    assert.equal(radius1, 500);
-
-    // Buyer: 200m, Seller: 500m, Platform: 5000m -> Effective: 200m
-    const radius2 = calculateEffectiveRadius(200, 500, 5000);
-    assert.equal(radius2, 200);
-
-    // Buyer: 10000m (exceeds platform max), Seller: 8000m -> Effective: 5000m
-    const radius3 = calculateEffectiveRadius(10000, 8000, 5000);
-    assert.equal(radius3, 5000);
+  it('rejects invalid coordinates before calculating distance', () => {
+    assert.throws(() => calculateHaversineDistance(91, 3.9, 7.44, 3.9), /Invalid coordinates/);
   });
 
-  it('should evaluate service radius inclusion and exclusion correctly', () => {
-    assert.equal(isWithinServiceRadius(180, 500), true);
-    assert.equal(isWithinServiceRadius(500, 500), true);
-    assert.equal(isWithinServiceRadius(501, 500), false);
-    assert.equal(isWithinServiceRadius(1800, 500), false);
+  it('checks the configured 50-metre service boundary', () => {
+    const approximately50m = calculateHaversineDistance(7.44, 3.9, 7.44045, 3.9);
+    assert.ok(approximately50m >= 49 && approximately50m <= 51,
+      `Expected approximately 50m, got ${approximately50m}m`);
+    assert.equal(isWithinServiceRadius(50, 50), true);
+    assert.equal(isWithinServiceRadius(51, 50), false);
   });
 
-  it('should calculate monetary amount strictly server-side (kwhRequested * pricePerKwh)', () => {
-    const kwhRequested = 2;
-    const pricePerKwh = 250;
-    const amount = Math.round(kwhRequested * pricePerKwh);
-    assert.equal(amount, 500);
+  it('uses the smallest buyer, seller and platform radius', () => {
+    assert.equal(calculateEffectiveRadius(1000, 500, 5000), 500);
+    assert.equal(calculateEffectiveRadius(200, 500, 5000), 200);
+    assert.equal(calculateEffectiveRadius(10000, 8000, 5000), 5000);
+    assert.equal(calculateEffectiveRadius(0, 500, 5000), 500);
   });
 
-  it('should calculate remaining sellable energy safely (availableKwh - reservedKwh)', () => {
+  it('calculates the server-side purchase amount from requested kWh and tariff', () => {
+    const amountNaira = Math.round(2 * 250);
+    assert.equal(amountNaira, 500);
+  });
+
+  it('prevents a request from exceeding remaining sellable energy', () => {
     const availableKwh = 10;
     const reservedKwh = 4;
     const remainingSellable = availableKwh - reservedKwh;
     assert.equal(remainingSellable, 6);
-
-    // Attempting to request 7 kWh when only 6 remains must be rejected
-    const requestKwh = 7;
-    assert.equal(requestKwh > remainingSellable, true);
+    assert.equal(5 <= remainingSellable, true);
+    assert.equal(7 <= remainingSellable, false);
   });
 });
