@@ -261,7 +261,23 @@ export const requireAdmin = (
   if (req.user?.role !== 'ADMIN') {
     return res.status(403).json({ success: false, error: 'Administrator access required.' });
   }
+
+  // Admin API access requires a recent Firebase sign-in, not merely a long-lived
+  // session token. The frontend re-prompts for the account password on /admin.
+  const now = Math.floor(Date.now() / 1000);
+  const authTime = req.firebaseIdentity?.auth_time;
+  const adminReauthWindowSeconds = 10 * 60;
+  if (
+    typeof authTime !== 'number' ||
+    authTime > now + 60 ||
+    now - authTime > adminReauthWindowSeconds
+  ) {
+    return res.status(403).json({
+      success: false,
+      code: 'ADMIN_REAUTH_REQUIRED',
+      error: 'Recent password verification is required for administrator access. Please re-enter your password.',
+    });
+  }
+
   return next();
 };
-
-export type { AuthenticatedRequest, FirebaseClaims };
