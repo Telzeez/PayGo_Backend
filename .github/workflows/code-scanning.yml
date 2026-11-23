@@ -46,7 +46,7 @@ jobs:
                   location = finding.get("locations", [{}])[0].get("physicalLocation", {})
                   artifact = location.get("artifactLocation", {}).get("uri", "unknown")
                   line = location.get("region", {}).get("startLine", "?")
-                  message = finding.get("message", {}).get("text", "").replace("\\n", " ")
+                  message = finding.get("message", {}).get("text", "").replace("\n", " ")
                   findings.append(f"{finding.get('level', 'warning')} {finding.get('ruleId')} {artifact}:{line} {message}")
           for finding in findings:
               print(finding)
