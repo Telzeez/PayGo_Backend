@@ -17,6 +17,7 @@ A robust, enterprise-grade backend service built with **Node.js**, **Express.js*
   - [Database Setup](#database-setup)
   - [Installation](#installation)
   - [Running & Testing](#running--testing)
+- [Unit and Functional Test Record](docs/TESTING_AND_RESULTS.md)
 - [API Reference](#-api-reference)
   - [Health Check](#health-check)
   - [Payment Initiation](#payment-initiation)
@@ -273,10 +274,15 @@ npm install
   ```bash
   npm run type-check
   ```
-- **Run Full Integration Test Suite**:
+- **Run unit tests**:
   ```bash
   npm test
   ```
+- **Run API/functional integration tests**:
+  ```bash
+  npm run test:integration
+  ```
+- **See test coverage, expected assertions and physical prototype test limitations**: [docs/TESTING_AND_RESULTS.md](docs/TESTING_AND_RESULTS.md)
 
 ---
 
