@@ -75,7 +75,7 @@ class MqttService {
       // Mark device as ONLINE and update last_seen_at
       await this.updateDeviceOnlineStatus(deviceId);
 
-      console.log(`📩 Message intercepted from ${deviceId} on ${topic}:`, payload);
+      console.log('📩 Message intercepted from device on topic:', deviceId, topic, payload);
 
       if (topic.includes('/ack') && (payload.action === 'CREDIT_ACK' || payload.status === 'ACCEPTED' || payload.status === 'REJECTED')) {
         await this.handleCreditAck(deviceId, payload as MqttCreditAck);
@@ -102,7 +102,7 @@ class MqttService {
         [deviceId]
       );
     } catch (err) {
-      console.error(`Failed to update device status for ${deviceId}:`, err);
+      console.error('Failed to update device status for device:', deviceId, err);
     }
   }
 
@@ -126,7 +126,7 @@ class MqttService {
       { qos: 1 },
       async (err) => {
         if (err) {
-          console.error(`❌ Failed to publish MQTT credit command for ${deviceId}:`, err);
+          console.error('❌ Failed to publish MQTT credit command for device:', deviceId, err);
         } else {
           console.log(`📡 Dispatched MQTT CREDIT command for ${deviceId} (txId: ${transactionId}, kwh: ${kwhAmount})`);
           try {
@@ -179,7 +179,7 @@ class MqttService {
         await this.publishCreditCommand(deviceId, parseFloat(row.kwh_amount), row.transaction_id);
       }
     } catch (err) {
-      console.error(`Error checking pending retries for ${deviceId}:`, err);
+      console.error('Error checking pending retries for device:', deviceId, err);
     }
   }
 
@@ -238,7 +238,7 @@ class MqttService {
         await client.query('ROLLBACK');
       } catch (rollbackErr) {}
       client.release();
-      console.error(`Error processing energy report for ${deviceId}:`, error);
+      console.error('Error processing energy report for device:', deviceId, error);
     }
   }
 
