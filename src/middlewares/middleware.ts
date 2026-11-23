@@ -14,7 +14,6 @@ const requestLogger = (req: Request, _res: Response, next: NextFunction) => {
     console.log(JSON.stringify({
         method: req.method,
         path: req.path,
-        ip: req.ip,
     }));
     next();
 };
