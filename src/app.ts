@@ -22,12 +22,12 @@ const allowedOrigins = new Set([
   'http://localhost:3000',
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
-].map((origin) => origin.replace(/\\/+$/, '')));
+].map((origin) => origin.replace(/\/+$/, '')));
 
 app.use(cors({
   origin: (origin, callback) => {
     // Non-browser clients and provider webhooks do not send an Origin header.
-    if (!origin || allowedOrigins.has(origin.replace(/\\/+$/, ''))) return callback(null, true);
+    if (!origin || allowedOrigins.has(origin.replace(/\/+$/, ''))) return callback(null, true);
     return callback(new Error('Origin is not allowed by the PAYGO CORS policy'));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
