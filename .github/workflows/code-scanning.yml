@@ -40,14 +40,18 @@ jobs:
           import json
           with open("semgrep.sarif", encoding="utf-8") as source:
               report = json.load(source)
+          findings = []
           for run in report.get("runs", []):
-              rules = {rule.get("id"): rule for rule in run.get("tool", {}).get("driver", {}).get("rules", [])}
               for finding in run.get("results", []):
                   location = finding.get("locations", [{}])[0].get("physicalLocation", {})
                   artifact = location.get("artifactLocation", {}).get("uri", "unknown")
                   line = location.get("region", {}).get("startLine", "?")
-                  message = finding.get("message", {}).get("text", "").replace("\n", " ")
-                  print(f"{finding.get('level', 'warning')} {finding.get('ruleId')} {artifact}:{line} {message}")
+                  message = finding.get("message", {}).get("text", "").replace("\\n", " ")
+                  findings.append(f"{finding.get('level', 'warning')} {finding.get('ruleId')} {artifact}:{line} {message}")
+          for finding in findings:
+              print(finding)
+          if findings:
+              raise SystemExit(f"Semgrep found {len(findings)} finding(s); resolve or explicitly suppress them.")
           PY
 
       - name: Upload SARIF to GitHub Code Scanning
