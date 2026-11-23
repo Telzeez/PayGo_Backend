@@ -17,6 +17,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Report dependency security advisories
+        run: |
+          npm audit --json > /tmp/paygo-npm-audit.json || true
+          node -e "const r = require('/tmp/paygo-npm-audit.json'); for (const [name, v] of Object.entries(r.vulnerabilities || {})) { console.log(name + ': ' + v.severity + ' | range=' + v.range + ' | fix=' + JSON.stringify(v.fixAvailable)); for (const item of v.via || []) if (typeof item === 'object') console.log('  - ' + item.title + ' | ' + item.url); }"
       - run: npm run type-check
       - run: npm test
       - run: npm run build
