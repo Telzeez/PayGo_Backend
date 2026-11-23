@@ -31,6 +31,7 @@ const initDb = async () => {
         '20261124_customer_load_assessment.sql',
         '20261125_prosumer_meter_registry.sql',
         '20261126_paygo_location_lifecycle.sql',
+        '20261123_device_api_key_auth.sql',
       ];
       for (const migrationFile of migrationFiles) {
         const migrationPath = path.join(path.dirname(sqlPath), 'migrations', migrationFile);
