@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { createPublicKey, verify as verifySignature } from 'node:crypto';
+import { createHash, createPublicKey, timingSafeEqual, verify as verifySignature } from 'node:crypto';
 import pool from '../db.js';
 import { JwtPayload } from '../types/index.js';
 
@@ -211,6 +211,57 @@ export const requireRole = (allowedRoles: Array<'BUYER' | 'OWNER' | 'SELLER'>) =
       error: `Access denied. Requires one of capabilities: ${allowedRoles.join(', ')}`,
     });
   };
+};
+
+
+/**
+ * Hardware requests use a device-specific API key. Only the SHA-256 hash is
+ * stored in the database; the raw key is returned once during admin rotation.
+ */
+export const authenticateDevice = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const deviceId = String(req.params.deviceId || '').trim();
+  const suppliedKey = req.header('x-device-api-key')?.trim() || '';
+
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) ||
+      suppliedKey.length < 32 || suppliedKey.length > 128) {
+    return res.status(401).json({ success: false, error: 'Valid device credentials are required.' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT device_api_key_hash FROM devices WHERE device_id = $1',
+      [deviceId]
+    );
+    const storedHash = result.rows[0]?.device_api_key_hash as string | undefined;
+    if (!storedHash || !/^[a-f0-9]{64}$/i.test(storedHash)) {
+      return res.status(401).json({ success: false, error: 'Device is not configured for authenticated API access.' });
+    }
+
+    const suppliedHash = createHash('sha256').update(suppliedKey).digest();
+    const expectedHash = Buffer.from(storedHash, 'hex');
+    if (expectedHash.length !== suppliedHash.length || !timingSafeEqual(expectedHash, suppliedHash)) {
+      return res.status(401).json({ success: false, error: 'Invalid device credentials.' });
+    }
+    return next();
+  } catch (error) {
+    console.error('Device authentication lookup failed:', error);
+    return res.status(503).json({ success: false, error: 'Device authentication is temporarily unavailable.' });
+  }
+};
+
+export const requireAdmin = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  if (req.user?.role !== 'ADMIN') {
+    return res.status(403).json({ success: false, error: 'Administrator access required.' });
+  }
+  return next();
 };
 
 export type { AuthenticatedRequest, FirebaseClaims };
