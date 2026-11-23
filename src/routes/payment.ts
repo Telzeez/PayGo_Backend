@@ -29,9 +29,28 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
       return res.status(403).json({ success: false, error: 'You do not have permission to recharge this meter' });
     }
 
-    const requestOrigin = (req.headers.origin as string) ||
-      (req.headers.referer ? new URL(req.headers.referer).origin : undefined);
-    const frontendUrl = (process.env.FRONTEND_URL || requestOrigin || 'http://localhost:3000').replace(/\/+$/, '');
+    // Never derive a payment callback from the caller-controlled Origin/Referer headers.
+    const configuredFrontendUrl = process.env.FRONTEND_URL ||
+      (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
+    if (!configuredFrontendUrl) {
+      console.error('FRONTEND_URL must be configured before initiating payments in production.');
+      return res.status(503).json({ success: false, error: 'Payment service is not fully configured.' });
+    }
+
+    let frontendUrl: string;
+    try {
+      const parsedFrontendUrl = new URL(configuredFrontendUrl);
+      const isLocalHttp = parsedFrontendUrl.protocol === 'http:' &&
+        ['localhost', '127.0.0.1'].includes(parsedFrontendUrl.hostname);
+      if (parsedFrontendUrl.username || parsedFrontendUrl.password ||
+          (parsedFrontendUrl.protocol !== 'https:' && !isLocalHttp)) {
+        throw new Error('FRONTEND_URL must be an HTTPS origin (HTTP is allowed only for localhost).');
+      }
+      frontendUrl = parsedFrontendUrl.origin;
+    } catch (configurationError) {
+      console.error('Invalid FRONTEND_URL configuration:', configurationError);
+      return res.status(503).json({ success: false, error: 'Payment service is not fully configured.' });
+    }
     const response = await axios.post(
       'https://api.paystack.co/transaction/initialize',
       {
