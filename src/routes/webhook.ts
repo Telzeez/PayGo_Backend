@@ -1,7 +1,6 @@
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
-import pool from '../db.js';
 import { sendSms } from '../services/sms.js';
 import { PaystackWebhookEvent } from '../types/index.js';
 import { processSuccessfulPayment } from '../services/paymentProcessor.js';
@@ -16,54 +15,47 @@ const SALT_ROUNDS: number = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10', 10)
 const TOKEN_EXPIRY_HOURS: number = parseInt(process.env.TOKEN_EXPIRY_HOURS || '72', 10);
 const PRICE_PER_KWH: number = parseFloat(process.env.PRICE_PER_KWH || '200');
 
-router.post(
-  '/paystack',
-  async (req: Request, res: Response) => {
-    // 🔑 Get a dedicated client from the pool to handle the single transaction session
-    const client = await pool.connect();
+router.post('/paystack', async (req: Request, res: Response) => {
+  const secret = process.env.PAYSTACK_SECRET_KEY || '';
+  const signature = String(req.headers['x-paystack-signature'] || '');
+  const rawBodyString = (req as any).rawBody
+    ? (req as any).rawBody.toString('utf8')
+    : JSON.stringify(req.body || {});
+  const expectedSignature = crypto.createHmac('sha512', secret).update(rawBodyString).digest();
+  const receivedSignature = /^[a-f0-9]{128}$/i.test(signature)
+    ? Buffer.from(signature, 'hex')
+    : Buffer.alloc(0);
 
-    try {
-      const secret = process.env.PAYSTACK_SECRET_KEY || '';
-      const signature = req.headers['x-paystack-signature'] as string;
-      
-      const rawBodyString = (req as any).rawBody ? (req as any).rawBody.toString('utf8') : JSON.stringify(req.body);
-      const hash = crypto.createHmac('sha512', secret).update(rawBodyString).digest('hex');
-
-      if (hash !== signature) {
-        console.warn('Invalid Paystack signature');
-        client.release(); // Always release the client back to the pool
-        return res.status(401).send('Invalid signature');
-      }
-
-      const event = req.body as PaystackWebhookEvent;
-
-      if (event.event === 'charge.success') {
-        const transaction = event.data;
-        const reference = transaction.reference;
-
-        const buyerEmail: string = transaction.customer.email;
-        const amountPaid: number = transaction.amount / 100; // Amount in Naira
-        const deviceId: string = transaction.metadata.deviceId || transaction.metadata.deviceid || 'device_001';
-
-        await processSuccessfulPayment(reference, buyerEmail, amountPaid, deviceId);
-
-        client.release();
-        return res.status(200).send('Webhook processed');
-      }
-
-      client.release();
-      res.status(200).send('Event ignored');
-    } catch (error) {
-      console.error('Webhook error, rolling back modifications:', error);
-      try {
-        await client.query('ROLLBACK');
-      } catch (rollbackError) {
-        console.error('Failed to rollback transaction:', rollbackError);
-      }
-      client.release();
-      res.status(500).send('Webhook processing failed');
-    }
+  // Validate before doing any database work; compare fixed-length buffers in constant time.
+  if (!secret || receivedSignature.length !== expectedSignature.length ||
+      !crypto.timingSafeEqual(expectedSignature, receivedSignature)) {
+    console.warn('Rejected Paystack webhook with an invalid signature.');
+    return res.status(401).send('Invalid signature');
   }
-);
+
+  try {
+    const event = req.body as PaystackWebhookEvent;
+    if (event.event === 'charge.success') {
+      const transaction = event.data;
+      const reference = transaction.reference;
+      const buyerEmail = transaction.customer?.email;
+      const amountPaid = transaction.amount / 100;
+      const deviceId = transaction.metadata?.deviceId || transaction.metadata?.deviceid;
+
+      if (!reference || !buyerEmail || !deviceId ||
+          !Number.isFinite(amountPaid) || amountPaid <= 0) {
+        return res.status(400).send('Invalid payment event');
+      }
+
+      await processSuccessfulPayment(reference, buyerEmail, amountPaid, deviceId);
+      return res.status(200).send('Webhook processed');
+    }
+
+    return res.status(200).send('Event ignored');
+  } catch (error) {
+    console.error('Paystack webhook processing failed:', error);
+    return res.status(500).send('Webhook processing failed');
+  }
+});
 
 export default router;
