@@ -212,7 +212,7 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
               s.device_id AS "sourceDeviceId", s.owner_id AS "sourceOwnerId",
               c.customer_id AS "customerId", u.email AS "customerEmail",
               c.receiving_device_id AS "receivingDeviceId",
-              c.buyer_latitude AS "buyerLatitude", c.buyer_longitude AS "buyerLongitude",
+              c.buyer_latitude::float8 AS "buyerLatitude", c.buyer_longitude::float8 AS "buyerLongitude",
               c.buyer_distance_m AS "buyerDistanceMeters",
               c.installation_confirmed_at AS "installationConfirmedAt",
               c.status, c.requested_power_w AS "requestedPowerW",
