@@ -19,8 +19,16 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
       return res.status(403).json({ success: false, error: 'Payment email must match the signed-in account' });
     }
 
-    const owned = await pool.query(
-      `SELECT 1 FROM devices d
+    const access = await pool.query(
+      `SELECT d.owner_id,
+              EXISTS (
+                SELECT 1 FROM customer_connections c
+                JOIN energy_sources s ON s.id = c.source_id
+                WHERE s.device_id = d.device_id AND c.customer_id = $2
+                  AND c.status IN ('APPROVED', 'PENDING_REVISION')
+                  AND c.installation_confirmed_at IS NOT NULL
+              ) AS "isConnectedBuyer"
+       FROM devices d
        WHERE d.device_id = $1
          AND (d.owner_id = $2 OR EXISTS (
            SELECT 1 FROM customer_connections c
@@ -31,8 +39,12 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
        LIMIT 1`,
       [deviceId, req.user!.userId]
     );
-    if (!owned.rows.length) {
-      return res.status(403).json({ success: false, error: 'You do not have permission to recharge this meter' });
+    if (!access.rows.length) {
+      return res.status(403).json({ success: false, error: 'You do not have permission to recharge this meter.' });
+    }
+    const isMeterOwner = Number(access.rows[0].owner_id) === req.user!.userId;
+    if (!isMeterOwner && marketplacePurchaseId === undefined) {
+      return res.status(403).json({ success: false, error: 'Connected buyers must purchase energy through an active marketplace listing.' });
     }
 
     let claimedPurchaseId: number | null = null;
