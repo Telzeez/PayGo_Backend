@@ -436,7 +436,9 @@ export class MarketplaceService {
       const staleRes = await client.query(
         `SELECT id, listing_id, kwh_requested
          FROM marketplace_purchases
-         WHERE status = 'RESERVED' AND created_at < NOW() - ($1 || ' minutes')::INTERVAL
+         WHERE status IN ('RESERVED', 'PAYMENT_PENDING')
+           AND (paystack_reference IS NULL OR status = 'RESERVED')
+           AND created_at < NOW() - ($1 || ' minutes')::INTERVAL
          FOR UPDATE`,
         [expiryMinutes]
       );
