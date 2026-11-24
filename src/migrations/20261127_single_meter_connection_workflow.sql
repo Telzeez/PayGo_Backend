@@ -35,5 +35,11 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_customer_connections_source_lifecycle
   ON customer_connections(source_id, status, requested_at DESC);
 
+-- Enforce one installed buyer connection per physical source meter.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_connections_one_installed_buyer_per_source
+  ON customer_connections(source_id)
+  WHERE status IN ('APPROVED', 'PENDING_REVISION')
+    AND installation_confirmed_at IS NOT NULL;
+
 -- The physical meter remains registered to the prosumer. No buyer receiving
 -- meter is created or assigned by this prototype workflow.
