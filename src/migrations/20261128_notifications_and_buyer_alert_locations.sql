@@ -56,6 +56,7 @@ CREATE OR REPLACE FUNCTION paygo_notify_nearby_buyers() RETURNS TRIGGER AS $$
 DECLARE source_record RECORD;
 BEGIN
   IF NEW.status <> 'ACTIVE' THEN RETURN NEW; END IF;
+  IF TG_OP = 'UPDATE' AND OLD.status = 'ACTIVE' THEN RETURN NEW; END IF;
   SELECT id, owner_id, name, latitude, longitude, service_radius_m
     INTO source_record
     FROM energy_sources
@@ -83,4 +84,10 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_paygo_notify_nearby_buyers ON energy_listings;
 CREATE TRIGGER trg_paygo_notify_nearby_buyers
 AFTER INSERT ON energy_listings
+FOR EACH ROW EXECUTE FUNCTION paygo_notify_nearby_buyers();
+
+-- Reactivating a paused or revoked listing is also a fresh offer to nearby buyers.
+DROP TRIGGER IF EXISTS trg_paygo_notify_reactivated_listing ON energy_listings;
+CREATE TRIGGER trg_paygo_notify_reactivated_listing
+AFTER UPDATE OF status ON energy_listings
 FOR EACH ROW EXECUTE FUNCTION paygo_notify_nearby_buyers();
