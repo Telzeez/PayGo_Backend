@@ -71,6 +71,13 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
       (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
     if (!configuredFrontendUrl) {
       console.error('FRONTEND_URL must be configured before initiating payments in production.');
+      if (claimedPurchaseId) {
+        await pool.query(
+          `UPDATE marketplace_purchases SET status = 'RESERVED', updated_at = NOW()
+           WHERE id = $1 AND status = 'PAYMENT_PENDING' AND paystack_reference IS NULL`,
+          [claimedPurchaseId]
+        );
+      }
       return res.status(503).json({ success: false, error: 'Payment service is not fully configured.' });
     }
 
@@ -86,6 +93,13 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
       frontendUrl = parsedFrontendUrl.origin;
     } catch (configurationError) {
       console.error('Invalid FRONTEND_URL configuration:', configurationError);
+      if (claimedPurchaseId) {
+        await pool.query(
+          `UPDATE marketplace_purchases SET status = 'RESERVED', updated_at = NOW()
+           WHERE id = $1 AND status = 'PAYMENT_PENDING' AND paystack_reference IS NULL`,
+          [claimedPurchaseId]
+        );
+      }
       return res.status(503).json({ success: false, error: 'Payment service is not fully configured.' });
     }
     const response = await axios.post(
