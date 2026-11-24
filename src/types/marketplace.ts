@@ -50,7 +50,7 @@ export interface MarketplacePurchase {
   listingId: number;
   buyerId: number;
   sellerId: number;
-  deviceId: string; // Buyer's meter receiving purchased energy
+  deviceId: string; // Prosumer-owned physical meter credited for this purchase
   sellerDeviceId?: string;
   distanceMeters: number;
   pricePerKwh: number;

@@ -83,6 +83,7 @@ export interface PaymentInitialRequest {
     amount: number;
     email: string;
     deviceId: string;
+    marketplacePurchaseId?: number;
 }
 export interface MqttRedeemPayload {
     code: string;
@@ -115,7 +116,7 @@ export interface PaystackWebhookEvent {
     data: {
         amount: number;
         customer: {email: string};
-        metadata: {deviceId?: string; deviceid?: string};
+        metadata: {deviceId?: string; deviceid?: string; marketplacePurchaseId?: number | string};
         reference: string
     }
 }

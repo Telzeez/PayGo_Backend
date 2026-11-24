@@ -1,6 +1,7 @@
 import express, { Response } from 'express';
 import pool from '../db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/authMiddleware.js';
+import { calculateHaversineDistance, isValidCoordinate } from '../services/location.js';
 import {
   ApplianceSelection,
   calculateLoadAssessment,
@@ -113,7 +114,8 @@ router.post('/requests', async (req: AuthenticatedRequest, res: Response) => {
   try {
     await client.query('BEGIN');
     const sourceRes = await client.query(
-      `SELECT id, owner_id, status, max_capacity_w, max_capacity_va, max_surge_va, safety_margin_pct
+      `SELECT id, owner_id, status, latitude, longitude, service_radius_m,
+              max_capacity_w, max_capacity_va, max_surge_va, safety_margin_pct
        FROM energy_sources WHERE id = $1 FOR UPDATE`,
       [sourceId]
     );
@@ -126,6 +128,40 @@ router.post('/requests', async (req: AuthenticatedRequest, res: Response) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, error: 'You cannot request a connection to your own energy source.' });
     }
+    const buyerLatitude = Number(req.body?.buyerLatitude);
+    const buyerLongitude = Number(req.body?.buyerLongitude);
+    if (!isValidCoordinate(buyerLatitude, buyerLongitude)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, code: 'BUYER_LOCATION_REQUIRED', error: 'Return to the marketplace and confirm your location before requesting a connection.' });
+    }
+    const buyerDistanceMeters = calculateHaversineDistance(
+      buyerLatitude, buyerLongitude, Number(source.latitude), Number(source.longitude)
+    );
+    if (buyerDistanceMeters > Number(source.service_radius_m)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, code: 'OUTSIDE_SERVICE_RADIUS', error: 'Your location is outside this energy source service radius.' });
+    }
+
+    // The prototype supports one connected buyer per physical source meter.
+    // Locking the source row above serializes competing connection requests.
+    const existingConnection = await client.query(
+      `SELECT id, customer_id, status FROM customer_connections
+       WHERE source_id = $1 AND status IN ('PENDING', 'APPROVED', 'PENDING_REVISION')
+       LIMIT 1`,
+      [sourceId]
+    );
+    if (existingConnection.rows.length) {
+      await client.query('ROLLBACK');
+      const sameBuyer = Number(existingConnection.rows[0].customer_id) === customerId;
+      return res.status(409).json({
+        success: false,
+        code: sameBuyer ? 'CONNECTION_ALREADY_EXISTS' : 'SOURCE_ALREADY_CONNECTED',
+        error: sameBuyer
+          ? 'You already have an active or pending connection request for this energy source.'
+          : 'This energy source already has a pending or active buyer connection.'
+      });
+    }
+
     if ([source.max_capacity_w, source.max_capacity_va, source.max_surge_va, source.safety_margin_pct].some(v => v === null)) {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, code: 'SOURCE_CAPACITY_NOT_CONFIGURED', error: 'The energy source owner must configure its electrical capacity before connection requests can be assessed.' });
@@ -134,15 +170,19 @@ router.post('/requests', async (req: AuthenticatedRequest, res: Response) => {
     const assessment = calculateLoadAssessment(selections, catalogue, Number(source.safety_margin_pct));
     const request = await client.query(
       `INSERT INTO customer_connections
-       (source_id, customer_id, requested_power_w,
-        requested_apparent_va, requested_starting_surge_va, safety_margin_pct)
-       VALUES ($1, $2, $3, $4, $5, $6)
+       (source_id, customer_id, buyer_latitude, buyer_longitude, buyer_distance_m,
+        requested_power_w, requested_apparent_va, requested_starting_surge_va, safety_margin_pct)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id, status, requested_power_w AS "requestedPowerW",
          requested_apparent_va AS "requestedApparentVa",
          requested_starting_surge_va AS "requestedStartingSurgeVa",
          safety_margin_pct AS "safetyMarginPct", requested_at AS "requestedAt"`,
-      [sourceId, customerId, assessment.requestedPowerW,
-       assessment.requestedApparentVa, assessment.requestedStartingSurgeVa, Number(source.safety_margin_pct)]
+      [sourceId, customerId,
+       Number(buyerLatitude.toFixed(3)),
+       Number(buyerLongitude.toFixed(3)),
+       Math.round(buyerDistanceMeters),
+       assessment.requestedPowerW, assessment.requestedApparentVa,
+       assessment.requestedStartingSurgeVa, Number(source.safety_margin_pct)]
     );
     const connectionId = request.rows[0].id;
     for (const item of selections) {
@@ -169,8 +209,12 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const result = await pool.query(
       `SELECT c.id, c.source_id AS "sourceId", s.name AS "sourceName",
-              s.owner_id AS "sourceOwnerId",
-              c.customer_id AS "customerId", c.receiving_device_id AS "receivingDeviceId",
+              s.device_id AS "sourceDeviceId", s.owner_id AS "sourceOwnerId",
+              c.customer_id AS "customerId", u.email AS "customerEmail",
+              c.receiving_device_id AS "receivingDeviceId",
+              c.buyer_latitude::float8 AS "buyerLatitude", c.buyer_longitude::float8 AS "buyerLongitude",
+              c.buyer_distance_m AS "buyerDistanceMeters",
+              c.installation_confirmed_at AS "installationConfirmedAt",
               c.status, c.requested_power_w AS "requestedPowerW",
               c.requested_apparent_va AS "requestedApparentVa",
               c.requested_starting_surge_va AS "requestedStartingSurgeVa",
@@ -197,6 +241,7 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
                 WHERE ca.connection_id = c.id
               ), '[]'::json) AS appliances
        FROM customer_connections c JOIN energy_sources s ON s.id = c.source_id
+       JOIN users u ON u.id = c.customer_id
        WHERE c.customer_id = $1 OR s.owner_id = $1
        ORDER BY c.requested_at DESC`,
       [req.user!.userId]
@@ -244,6 +289,20 @@ router.post('/:id/decision', async (req: AuthenticatedRequest, res: Response) =>
     if (!['PENDING', 'PENDING_REVISION'].includes(connection.status)) {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, error: 'This connection request is not awaiting a decision.' });
+    }
+
+    if (decision === 'APPROVE') {
+      const otherActive = await client.query(
+        `SELECT id FROM customer_connections
+         WHERE source_id = $1 AND id <> $2
+           AND status IN ('APPROVED', 'PENDING_REVISION')
+         LIMIT 1`,
+        [sourceId, connectionId]
+      );
+      if (otherActive.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, code: 'SOURCE_ALREADY_CONNECTED', error: 'This energy source already has an approved buyer connection.' });
+      }
     }
 
     if (decision === 'REJECT') {
@@ -295,6 +354,45 @@ router.post('/:id/decision', async (req: AuthenticatedRequest, res: Response) =>
     return res.status(500).json({ success: false, error: 'Unable to process connection decision.' });
   } finally {
     client.release();
+  }
+});
+
+
+router.post('/:id/installation', async (req: AuthenticatedRequest, res: Response) => {
+  const connectionId = Number(req.params.id);
+  if (!Number.isInteger(connectionId) || connectionId <= 0) {
+    return res.status(400).json({ success: false, error: 'Invalid connection ID.' });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE customer_connections c
+       SET installation_confirmed_at = NOW(), updated_at = NOW()
+       FROM energy_sources s
+       WHERE c.id = $1 AND s.id = c.source_id AND s.owner_id = $2
+         AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_connections other
+           WHERE other.source_id = c.source_id AND other.id <> c.id
+             AND other.status IN ('APPROVED', 'PENDING_REVISION')
+             AND other.installation_confirmed_at IS NOT NULL
+         )
+       RETURNING c.id, c.installation_confirmed_at AS "installationConfirmedAt"`,
+      [connectionId, req.user!.userId]
+    );
+    if (!result.rows.length) {
+      return res.status(409).json({ success: false, error: 'Only the source owner can confirm installation for an approved connection that has not already been activated.' });
+    }
+    return res.json({
+      success: true,
+      ...result.rows[0],
+      message: 'Cable installation confirmed. The buyer can now access the shared PAYGO meter and purchase energy.'
+    });
+  } catch (error) {
+    if ((error as any)?.code === '23505') {
+      return res.status(409).json({ success: false, code: 'SOURCE_ALREADY_CONNECTED', error: 'Another buyer connection has already been activated for this energy source.' });
+    }
+    console.error('Connection installation confirmation error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to confirm the cable installation.' });
   }
 });
 

@@ -296,18 +296,17 @@ router.post('/listings/:id/purchase', authenticateToken, async (req: Authenticat
     }
 
     const listingId = parseInt(`${req.params.id}`, 10);
-    const { kwhRequested, buyerDeviceId } = req.body;
+    const { kwhRequested } = req.body;
 
-    if (!kwhRequested || !buyerDeviceId) {
+    if (kwhRequested === undefined || !Number.isFinite(Number(kwhRequested)) || Number(kwhRequested) <= 0) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required parameters: kwhRequested, buyerDeviceId',
+        error: 'A positive kwhRequested value is required.',
       });
     }
 
     const result = await MarketplaceService.createPurchaseIntent({
       buyerId: req.user.userId,
-      buyerDeviceId,
       listingId,
       kwhRequested: parseFloat(kwhRequested),
     });

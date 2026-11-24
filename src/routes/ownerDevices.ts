@@ -410,6 +410,12 @@ router.get('/:deviceId/consumption', async (req: AuthenticatedRequest, res: Resp
        WHERE d.device_id = $1
          AND (d.owner_id = $2 OR EXISTS (
            SELECT 1 FROM energy_sources es WHERE es.device_id = d.device_id AND es.owner_id = $2
+         ) OR EXISTS (
+           SELECT 1 FROM customer_connections c
+           JOIN energy_sources es ON es.id = c.source_id
+           WHERE es.device_id = d.device_id AND c.customer_id = $2
+             AND c.status IN ('APPROVED', 'PENDING_REVISION')
+             AND c.installation_confirmed_at IS NOT NULL
          )) LIMIT 1`,
       [deviceId, ownerId]
     );

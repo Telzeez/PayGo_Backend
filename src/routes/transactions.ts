@@ -17,7 +17,15 @@ router.get('/verify/:reference', authenticateToken, async (req: AuthenticatedReq
 
     const canAccessDevice = async (deviceId: string) => {
       const access = await pool.query(
-        'SELECT 1 FROM devices WHERE device_id = $1 AND owner_id = $2 LIMIT 1',
+        `SELECT 1 FROM devices d
+         WHERE d.device_id = $1
+           AND (d.owner_id = $2 OR EXISTS (
+             SELECT 1 FROM customer_connections c
+             JOIN energy_sources s ON s.id = c.source_id
+             WHERE s.device_id = d.device_id AND c.customer_id = $2
+               AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NOT NULL
+           ))
+         LIMIT 1`,
         [deviceId, req.user!.userId]
       );
       return access.rows.length > 0;
@@ -69,23 +77,30 @@ router.get('/verify/:reference', authenticateToken, async (req: AuthenticatedReq
           const buyerEmail: string = transaction.customer.email;
           const amountPaid: number = transaction.amount / 100;
           const deviceId: string | undefined = transaction.metadata?.deviceId || transaction.metadata?.deviceid;
-          if (!deviceId || !(await canAccessDevice(deviceId))) {
+          const rawMarketplacePurchaseId = transaction.metadata?.marketplacePurchaseId;
+          const marketplacePurchaseId = rawMarketplacePurchaseId === undefined ? undefined : Number(rawMarketplacePurchaseId);
+          if (!deviceId || !(await canAccessDevice(deviceId)) ||
+              (rawMarketplacePurchaseId !== undefined && (!Number.isInteger(marketplacePurchaseId) || marketplacePurchaseId! <= 0))) {
             return res.status(404).json({ status: 'failed', error: 'Transaction meter not found in your account' });
           }
 
           console.log(`[Active Fallback] Recovering missed webhook for reference: ${reference}`);
           
-          const processed = await processSuccessfulPayment(reference as string, buyerEmail, amountPaid, deviceId);
+          const processed = await processSuccessfulPayment(reference as string, buyerEmail, amountPaid, deviceId, marketplacePurchaseId);
           
           if (processed) {
-             const PRICE_PER_KWH = parseFloat(process.env.PRICE_PER_KWH || '200');
-             const kwhAmount = amountPaid / PRICE_PER_KWH;
-             
+             const committed = await pool.query(
+               `SELECT kwh_amount, hardware_status FROM transactions WHERE reference = $1 LIMIT 1`,
+               [reference]
+             );
+             if (!committed.rows.length) {
+               return res.status(200).json({ status: 'pending', message: 'Payment was accepted and is being recorded.' });
+             }
              return res.status(200).json({
                status: 'success',
                data: {
-                 kwhAmount: kwhAmount,
-                 hardwareStatus: 'PENDING',
+                 kwhAmount: Number(committed.rows[0].kwh_amount),
+                 hardwareStatus: committed.rows[0].hardware_status || 'PENDING',
                  deviceId
                }
              });

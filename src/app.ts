@@ -11,6 +11,7 @@ import meterRegistryRoutes from './routes/meterRegistry.js';
 import transactionRoutes from './routes/transactions.js';
 import marketplaceRoutes from './routes/marketplace.js';
 import connectionRoutes from './routes/connections.js';
+import notificationRoutes from './routes/notifications.js';
 
 dotenv.config();
 const app: Express = express();
@@ -78,6 +79,7 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/connections', connectionRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString(), uptime: process.uptime() });
