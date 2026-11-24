@@ -178,7 +178,7 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
         `SELECT d.device_id AS "deviceId", d.meter_purpose AS purpose,
                 d.assignment_status AS "assignmentStatus", d.status,
                 d.current_balance AS balance, d.last_seen_at AS "lastSeenAt",
-                d.firmware_version AS "firmwareVersion",
+                d.last_updated AS "lastUpdated", d.firmware_version AS "firmwareVersion",
                 c.id AS "connectionId", c.customer_id AS "customerId",
                 u.email AS "customerEmail", c.status AS "connectionStatus"
          FROM devices d
@@ -194,7 +194,7 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
         `SELECT d.device_id AS "deviceId", d.meter_purpose AS purpose,
                 d.assignment_status AS "assignmentStatus", d.status,
                 d.current_balance AS balance, d.last_seen_at AS "lastSeenAt",
-                c.id AS "connectionId", s.name AS "sourceName", s.owner_id AS "prosumerId"
+                d.last_updated AS "lastUpdated", c.id AS "connectionId", s.name AS "sourceName", s.owner_id AS "prosumerId"
          FROM customer_connections c JOIN energy_sources s ON s.id = c.source_id
          JOIN devices d ON d.device_id = s.device_id
          WHERE c.customer_id = $1 AND c.status IN ('APPROVED', 'PENDING_REVISION')
