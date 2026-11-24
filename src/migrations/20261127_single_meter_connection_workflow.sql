@@ -17,7 +17,8 @@ BEGIN
       ADD CONSTRAINT customer_connections_buyer_location_pair
       CHECK (
         (buyer_latitude IS NULL AND buyer_longitude IS NULL)
-        OR (buyer_latitude BETWEEN -90 AND 90 AND buyer_longitude BETWEEN -180 AND 180)
+        OR (buyer_latitude IS NOT NULL AND buyer_longitude IS NOT NULL
+          AND buyer_latitude BETWEEN -90 AND 90 AND buyer_longitude BETWEEN -180 AND 180)
       );
   END IF;
   IF NOT EXISTS (
