@@ -353,7 +353,7 @@ export class MarketplaceService {
         `SELECT c.id, c.buyer_distance_m AS "buyerDistanceMeters"
          FROM customer_connections c
          WHERE c.source_id = $1 AND c.customer_id = $2
-           AND c.status = 'APPROVED'
+           AND c.status IN ('APPROVED', 'PENDING_REVISION')
            AND c.installation_confirmed_at IS NOT NULL
            AND c.approved_power_w IS NOT NULL
          FOR UPDATE`,
