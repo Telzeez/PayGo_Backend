@@ -318,6 +318,8 @@ export class MarketplaceService {
       throw new Error('Requested energy must be greater than 0 kWh');
     }
 
+    // Release abandoned reservations before calculating currently sellable energy.
+    await this.expireStaleReservations();
     const client = await pool.connect();
 
     try {
