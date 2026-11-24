@@ -178,11 +178,14 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
         `SELECT d.device_id AS "deviceId", d.meter_purpose AS purpose,
                 d.assignment_status AS "assignmentStatus", d.status,
                 d.current_balance AS balance, d.last_seen_at AS "lastSeenAt",
-                d.firmware_version AS "firmwareVersion",
+                d.last_updated AS "lastUpdated", d.firmware_version AS "firmwareVersion",
                 c.id AS "connectionId", c.customer_id AS "customerId",
                 u.email AS "customerEmail", c.status AS "connectionStatus"
-         FROM devices d LEFT JOIN customer_connections c
-           ON c.receiving_device_id = d.device_id AND c.status IN ('APPROVED', 'PENDING_REVISION')
+         FROM devices d
+         LEFT JOIN energy_sources es ON es.device_id = d.device_id
+         LEFT JOIN customer_connections c
+           ON c.source_id = es.id AND c.status IN ('APPROVED', 'PENDING_REVISION')
+              AND c.installation_confirmed_at IS NOT NULL
          LEFT JOIN users u ON u.id = c.customer_id
          WHERE d.owner_id = $1 ORDER BY d.device_id`,
         [req.user!.userId]
@@ -191,10 +194,11 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
         `SELECT d.device_id AS "deviceId", d.meter_purpose AS purpose,
                 d.assignment_status AS "assignmentStatus", d.status,
                 d.current_balance AS balance, d.last_seen_at AS "lastSeenAt",
-                c.id AS "connectionId", s.name AS "sourceName", s.owner_id AS "prosumerId"
-         FROM customer_connections c JOIN devices d ON d.device_id = c.receiving_device_id
-         JOIN energy_sources s ON s.id = c.source_id
+                d.last_updated AS "lastUpdated", c.id AS "connectionId", s.name AS "sourceName", s.owner_id AS "prosumerId"
+         FROM customer_connections c JOIN energy_sources s ON s.id = c.source_id
+         JOIN devices d ON d.device_id = s.device_id
          WHERE c.customer_id = $1 AND c.status IN ('APPROVED', 'PENDING_REVISION')
+           AND c.installation_confirmed_at IS NOT NULL
          ORDER BY c.updated_at DESC`,
         [req.user!.userId]
       )
@@ -220,12 +224,14 @@ router.get('/:deviceId', async (req: AuthenticatedRequest, res: Response) => {
               d.assignment_status AS "assignmentStatus", d.status,
               d.current_balance AS balance, d.last_seen_at AS "lastSeenAt",
               d.last_updated AS "lastUpdated",
-              EXISTS (SELECT 1 FROM customer_connections c WHERE c.receiving_device_id = d.device_id
-                AND c.customer_id = $2 AND c.status IN ('APPROVED', 'PENDING_REVISION')) AS "isAssignedBuyer"
+              EXISTS (SELECT 1 FROM customer_connections c JOIN energy_sources s ON s.id = c.source_id
+                WHERE s.device_id = d.device_id AND c.customer_id = $2
+                  AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NOT NULL) AS "isAssignedBuyer"
        FROM devices d WHERE d.device_id = $1
          AND (d.owner_id = $2 OR EXISTS (SELECT 1 FROM customer_connections c
-           WHERE c.receiving_device_id = d.device_id AND c.customer_id = $2
-             AND c.status IN ('APPROVED', 'PENDING_REVISION'))) LIMIT 1`,
+           JOIN energy_sources s ON s.id = c.source_id
+           WHERE s.device_id = d.device_id AND c.customer_id = $2
+             AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NOT NULL)) LIMIT 1`,
       [deviceId, req.user!.userId]
     );
     if (!access.rows.length) return res.status(404).json({ success: false, error: 'Meter not found in your account.' });

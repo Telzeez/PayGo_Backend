@@ -6,7 +6,7 @@ dotenv.config();
 
 const PRICE_PER_KWH: number = parseFloat(process.env.PRICE_PER_KWH || '200');
 
-export async function processSuccessfulPayment(reference: string, buyerEmail: string, amountPaid: number, deviceId: string): Promise<boolean> {
+export async function processSuccessfulPayment(reference: string, buyerEmail: string, amountPaid: number, deviceId: string, marketplacePurchaseId?: number): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -21,7 +21,31 @@ export async function processSuccessfulPayment(reference: string, buyerEmail: st
       return false;
     }
 
-    const kwhAmount = amountPaid / PRICE_PER_KWH;
+    let marketplacePurchase: any = null;
+    if (marketplacePurchaseId !== undefined) {
+      const purchaseRes = await client.query(
+        `SELECT p.id, p.listing_id, p.kwh_requested, p.amount, p.device_id,
+                p.status, p.paystack_reference, u.email AS "buyerEmail"
+         FROM marketplace_purchases p
+         JOIN users u ON u.id = p.buyer_id
+         WHERE p.id = $1
+         FOR UPDATE OF p`,
+        [marketplacePurchaseId]
+      );
+      if (!purchaseRes.rows.length) throw new Error('Marketplace purchase not found for this payment.');
+      marketplacePurchase = purchaseRes.rows[0];
+      if (marketplacePurchase.status !== 'PAYMENT_PENDING' ||
+          marketplacePurchase.device_id !== deviceId ||
+          String(marketplacePurchase.buyerEmail).toLowerCase() !== buyerEmail.toLowerCase() ||
+          Math.abs(Number(marketplacePurchase.amount) - amountPaid) > 0.01 ||
+          (marketplacePurchase.paystack_reference && marketplacePurchase.paystack_reference !== reference)) {
+        throw new Error('Marketplace payment does not match its pending purchase.');
+      }
+    }
+
+    const kwhAmount = marketplacePurchase
+      ? Number(marketplacePurchase.kwh_requested)
+      : amountPaid / PRICE_PER_KWH;
     const txId = `TXN_${crypto.randomUUID().substring(0, 8).toUpperCase()}`;
 
     await client.query(
@@ -40,21 +64,13 @@ export async function processSuccessfulPayment(reference: string, buyerEmail: st
         [deviceId, amountPaid, kwhAmount, txId, reference]
       );
 
-      const mktRes = await client.query(
-        `SELECT id, listing_id, kwh_requested
-         FROM marketplace_purchases
-         WHERE device_id = $1 AND status = 'RESERVED'
-         ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-        [deviceId]
-      );
-      if (mktRes.rows.length > 0) {
-        const purchase = mktRes.rows[0];
-        const requestedKwh = parseFloat(purchase.kwh_requested);
+      if (marketplacePurchase) {
+        const requestedKwh = Number(marketplacePurchase.kwh_requested);
         await client.query(
           `UPDATE marketplace_purchases
            SET status = 'COMPLETED', paystack_reference = $1, updated_at = NOW()
-           WHERE id = $2`,
-          [reference, purchase.id]
+           WHERE id = $2 AND status = 'PAYMENT_PENDING'`,
+          [reference, marketplacePurchase.id]
         );
         await client.query(
           `UPDATE energy_listings
@@ -63,7 +79,7 @@ export async function processSuccessfulPayment(reference: string, buyerEmail: st
                status = CASE WHEN (available_kwh - $1) <= 0 THEN 'SOLD_OUT' ELSE status END,
                updated_at = NOW()
            WHERE id = $2`,
-          [requestedKwh, purchase.listing_id]
+          [requestedKwh, marketplacePurchase.listing_id]
         );
       }
     } catch (dbError: any) {
