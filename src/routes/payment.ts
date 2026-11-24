@@ -26,7 +26,7 @@ router.post('/initiate', authenticateToken, async (req: AuthenticatedRequest, re
            SELECT 1 FROM customer_connections c
            JOIN energy_sources s ON s.id = c.source_id
            WHERE s.device_id = d.device_id AND c.customer_id = $2
-             AND c.status = 'APPROVED' AND c.installation_confirmed_at IS NOT NULL
+             AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NOT NULL
          ))
        LIMIT 1`,
       [deviceId, req.user!.userId]
