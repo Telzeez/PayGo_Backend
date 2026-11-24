@@ -388,6 +388,9 @@ router.post('/:id/installation', async (req: AuthenticatedRequest, res: Response
       message: 'Cable installation confirmed. The buyer can now access the shared PAYGO meter and purchase energy.'
     });
   } catch (error) {
+    if ((error as any)?.code === '23505') {
+      return res.status(409).json({ success: false, code: 'SOURCE_ALREADY_CONNECTED', error: 'Another buyer connection has already been activated for this energy source.' });
+    }
     console.error('Connection installation confirmation error:', error);
     return res.status(500).json({ success: false, error: 'Unable to confirm the cable installation.' });
   }
