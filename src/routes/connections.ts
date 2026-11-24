@@ -373,7 +373,7 @@ router.post('/:id/installation', async (req: AuthenticatedRequest, res: Response
        SET installation_confirmed_at = NOW(), updated_at = NOW()
        FROM energy_sources s
        WHERE c.id = $1 AND s.id = c.source_id AND s.owner_id = $2
-         AND c.status = 'APPROVED' AND c.installation_confirmed_at IS NULL
+         AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NULL
        RETURNING c.id, c.installation_confirmed_at AS "installationConfirmedAt"`,
       [connectionId, req.user!.userId]
     );
