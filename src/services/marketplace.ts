@@ -309,11 +309,10 @@ export class MarketplaceService {
    */
   static async createPurchaseIntent(params: {
     buyerId: number;
-    buyerDeviceId: string;
     listingId: number;
     kwhRequested: number;
   }): Promise<{ purchase: MarketplacePurchase; redirectUrl?: string }> {
-    const { buyerId, buyerDeviceId, listingId, kwhRequested } = params;
+    const { buyerId, listingId, kwhRequested } = params;
 
     if (kwhRequested <= 0) {
       throw new Error('Requested energy must be greater than 0 kWh');
@@ -348,24 +347,20 @@ export class MarketplaceService {
         throw new Error('Sellers cannot purchase from their own energy listing');
       }
 
-      // The receiving meter remains owned by the prosumer. The buyer is
-      // authorised through the approved connection, not through device ownership.
+      // A connected buyer shares the prosumer's physical generation meter.
+      // Checkout is enabled only after the owner confirms the cable installation.
       const approvedConnection = await client.query(
-        `SELECT c.id
+        `SELECT c.id, c.buyer_distance_m AS "buyerDistanceMeters"
          FROM customer_connections c
-         JOIN devices d ON d.device_id = c.receiving_device_id
          WHERE c.source_id = $1 AND c.customer_id = $2
-           AND c.receiving_device_id = $3
-           AND c.status IN ('APPROVED', 'PENDING_REVISION')
+           AND c.status = 'APPROVED'
+           AND c.installation_confirmed_at IS NOT NULL
            AND c.approved_power_w IS NOT NULL
-           AND d.owner_id = $4
-           AND d.meter_purpose = 'RECEIVING'
-           AND d.assignment_status = 'ACTIVATED'
-         FOR UPDATE OF c, d`,
-        [listing.energy_source_id, buyerId, buyerDeviceId, listing.seller_id]
+         FOR UPDATE`,
+        [listing.energy_source_id, buyerId]
       );
       if (!approvedConnection.rows.length) {
-        throw new Error('A prosumer-approved connection with a receiving meter assigned by that prosumer is required before checkout.');
+        throw new Error('The owner must approve your connection and confirm cable installation before you can purchase energy.');
       }
 
       const availableKwh = parseFloat(listing.available_kwh);
@@ -376,9 +371,8 @@ export class MarketplaceService {
         throw new Error(`Only ${remainingSellable.toFixed(2)} kWh remains available for purchase`);
       }
 
-      // Buyer location is used only for discovery, never as a checkout restriction.
-      // distance_m is retained for legacy schema compatibility and is zero for remote purchases.
-      const distanceMeters = 0;
+      // Preserve the approximate connection distance captured when the buyer requested service.
+      const distanceMeters = Number(approvedConnection.rows[0].buyerDistanceMeters || 0);
 
       const pricePerKwh = parseFloat(listing.price_per_kwh);
       const amount = Math.round(kwhRequested * pricePerKwh);
@@ -408,7 +402,7 @@ export class MarketplaceService {
           listingId,
           buyerId,
           listing.seller_id,
-          buyerDeviceId,
+          listing.device_id,
           listing.device_id,
           distanceMeters,
           pricePerKwh,
