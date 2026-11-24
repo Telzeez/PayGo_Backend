@@ -89,14 +89,18 @@ router.get('/verify/:reference', authenticateToken, async (req: AuthenticatedReq
           const processed = await processSuccessfulPayment(reference as string, buyerEmail, amountPaid, deviceId, marketplacePurchaseId);
           
           if (processed) {
-             const PRICE_PER_KWH = parseFloat(process.env.PRICE_PER_KWH || '200');
-             const kwhAmount = amountPaid / PRICE_PER_KWH;
-             
+             const committed = await pool.query(
+               `SELECT kwh_amount, hardware_status FROM transactions WHERE reference = $1 LIMIT 1`,
+               [reference]
+             );
+             if (!committed.rows.length) {
+               return res.status(200).json({ status: 'pending', message: 'Payment was accepted and is being recorded.' });
+             }
              return res.status(200).json({
                status: 'success',
                data: {
-                 kwhAmount: kwhAmount,
-                 hardwareStatus: 'PENDING',
+                 kwhAmount: Number(committed.rows[0].kwh_amount),
+                 hardwareStatus: committed.rows[0].hardware_status || 'PENDING',
                  deviceId
                }
              });
