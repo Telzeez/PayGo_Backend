@@ -370,6 +370,12 @@ router.post('/:id/installation', async (req: AuthenticatedRequest, res: Response
        FROM energy_sources s
        WHERE c.id = $1 AND s.id = c.source_id AND s.owner_id = $2
          AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_connections other
+           WHERE other.source_id = c.source_id AND other.id <> c.id
+             AND other.status IN ('APPROVED', 'PENDING_REVISION')
+             AND other.installation_confirmed_at IS NOT NULL
+         )
        RETURNING c.id, c.installation_confirmed_at AS "installationConfirmedAt"`,
       [connectionId, req.user!.userId]
     );
