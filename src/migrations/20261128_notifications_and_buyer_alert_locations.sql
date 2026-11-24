@@ -26,3 +26,61 @@ CREATE TABLE IF NOT EXISTS buyer_alert_locations (
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_alert_locations_enabled
   ON buyer_alert_locations(enabled) WHERE enabled = TRUE;
+
+
+-- Notify the source owner immediately when a buyer submits a connection request.
+CREATE OR REPLACE FUNCTION paygo_notify_connection_request() RETURNS TRIGGER AS $$
+DECLARE owner_user_id INT;
+BEGIN
+  SELECT owner_id INTO owner_user_id FROM energy_sources WHERE id = NEW.source_id;
+  IF owner_user_id IS NOT NULL THEN
+    INSERT INTO notifications (user_id, type, title, message, target_url, entity_id)
+    VALUES (
+      owner_user_id, 'CONNECTION_REQUEST', 'New connection request',
+      'A buyer has requested a connection to your energy source.',
+      '/marketplace/seller?connectionId=' || NEW.id, NEW.id
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_paygo_notify_connection_request ON customer_connections;
+CREATE TRIGGER trg_paygo_notify_connection_request
+AFTER INSERT ON customer_connections
+FOR EACH ROW EXECUTE FUNCTION paygo_notify_connection_request();
+
+-- Notify opted-in buyers when a new active listing is published within the
+-- source's service radius. Coordinates in buyer_alert_locations are approximate.
+CREATE OR REPLACE FUNCTION paygo_notify_nearby_buyers() RETURNS TRIGGER AS $$
+DECLARE source_record RECORD;
+BEGIN
+  IF NEW.status <> 'ACTIVE' THEN RETURN NEW; END IF;
+  SELECT id, owner_id, name, latitude, longitude, service_radius_m
+    INTO source_record
+    FROM energy_sources
+    WHERE id = NEW.energy_source_id AND status = 'ACTIVE';
+  IF NOT FOUND THEN RETURN NEW; END IF;
+
+  INSERT INTO notifications (user_id, type, title, message, target_url, entity_id)
+  SELECT a.user_id, 'NEARBY_ENERGY', 'Energy available near you',
+         source_record.name || ' has published energy within its service area.',
+         '/marketplace?listingId=' || NEW.id, NEW.id
+  FROM buyer_alert_locations a
+  JOIN users u ON u.id = a.user_id
+  WHERE a.enabled = TRUE AND u.is_buyer = TRUE
+    AND a.user_id <> source_record.owner_id
+    AND 6371000 * 2 * ASIN(SQRT(
+      POWER(SIN(RADIANS(a.latitude::float8 - source_record.latitude::float8) / 2), 2) +
+      COS(RADIANS(source_record.latitude::float8)) * COS(RADIANS(a.latitude::float8)) *
+      POWER(SIN(RADIANS(a.longitude::float8 - source_record.longitude::float8) / 2), 2)
+    )) <= source_record.service_radius_m;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_paygo_notify_nearby_buyers ON energy_listings;
+CREATE TRIGGER trg_paygo_notify_nearby_buyers
+AFTER INSERT ON energy_listings
+FOR EACH ROW EXECUTE FUNCTION paygo_notify_nearby_buyers();
