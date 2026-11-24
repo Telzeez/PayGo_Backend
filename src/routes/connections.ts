@@ -128,22 +128,18 @@ router.post('/requests', async (req: AuthenticatedRequest, res: Response) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, error: 'You cannot request a connection to your own energy source.' });
     }
-    const buyerLatitude = req.body?.buyerLatitude === undefined ? null : Number(req.body.buyerLatitude);
-    const buyerLongitude = req.body?.buyerLongitude === undefined ? null : Number(req.body.buyerLongitude);
-    let buyerDistanceMeters: number | null = null;
-    if ((buyerLatitude === null) !== (buyerLongitude === null) ||
-        (buyerLatitude !== null && !isValidCoordinate(buyerLatitude, buyerLongitude!))) {
+    const buyerLatitude = Number(req.body?.buyerLatitude);
+    const buyerLongitude = Number(req.body?.buyerLongitude);
+    if (!isValidCoordinate(buyerLatitude, buyerLongitude)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, error: 'Provide both valid buyer location coordinates.' });
+      return res.status(400).json({ success: false, code: 'BUYER_LOCATION_REQUIRED', error: 'Return to the marketplace and confirm your location before requesting a connection.' });
     }
-    if (buyerLatitude !== null && buyerLongitude !== null) {
-      buyerDistanceMeters = calculateHaversineDistance(
-        buyerLatitude, buyerLongitude, Number(source.latitude), Number(source.longitude)
-      );
-      if (buyerDistanceMeters > Number(source.service_radius_m)) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ success: false, code: 'OUTSIDE_SERVICE_RADIUS', error: 'Your location is outside this energy source service radius.' });
-      }
+    const buyerDistanceMeters = calculateHaversineDistance(
+      buyerLatitude, buyerLongitude, Number(source.latitude), Number(source.longitude)
+    );
+    if (buyerDistanceMeters > Number(source.service_radius_m)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, code: 'OUTSIDE_SERVICE_RADIUS', error: 'Your location is outside this energy source service radius.' });
     }
 
     // The prototype supports one connected buyer per physical source meter.
@@ -182,9 +178,9 @@ router.post('/requests', async (req: AuthenticatedRequest, res: Response) => {
          requested_starting_surge_va AS "requestedStartingSurgeVa",
          safety_margin_pct AS "safetyMarginPct", requested_at AS "requestedAt"`,
       [sourceId, customerId,
-       buyerLatitude === null ? null : Number(buyerLatitude.toFixed(3)),
-       buyerLongitude === null ? null : Number(buyerLongitude.toFixed(3)),
-       buyerDistanceMeters === null ? null : Math.round(buyerDistanceMeters),
+       Number(buyerLatitude.toFixed(3)),
+       Number(buyerLongitude.toFixed(3)),
+       Math.round(buyerDistanceMeters),
        assessment.requestedPowerW, assessment.requestedApparentVa,
        assessment.requestedStartingSurgeVa, Number(source.safety_margin_pct)]
     );
