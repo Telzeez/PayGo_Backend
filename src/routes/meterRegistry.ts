@@ -197,7 +197,7 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
                 c.id AS "connectionId", s.name AS "sourceName", s.owner_id AS "prosumerId"
          FROM customer_connections c JOIN energy_sources s ON s.id = c.source_id
          JOIN devices d ON d.device_id = s.device_id
-         WHERE c.customer_id = $1 AND c.status = 'APPROVED'
+         WHERE c.customer_id = $1 AND c.status IN ('APPROVED', 'PENDING_REVISION')
            AND c.installation_confirmed_at IS NOT NULL
          ORDER BY c.updated_at DESC`,
         [req.user!.userId]
@@ -226,12 +226,12 @@ router.get('/:deviceId', async (req: AuthenticatedRequest, res: Response) => {
               d.last_updated AS "lastUpdated",
               EXISTS (SELECT 1 FROM customer_connections c JOIN energy_sources s ON s.id = c.source_id
                 WHERE s.device_id = d.device_id AND c.customer_id = $2
-                  AND c.status = 'APPROVED' AND c.installation_confirmed_at IS NOT NULL) AS "isAssignedBuyer"
+                  AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NOT NULL) AS "isAssignedBuyer"
        FROM devices d WHERE d.device_id = $1
          AND (d.owner_id = $2 OR EXISTS (SELECT 1 FROM customer_connections c
            JOIN energy_sources s ON s.id = c.source_id
            WHERE s.device_id = d.device_id AND c.customer_id = $2
-             AND c.status = 'APPROVED' AND c.installation_confirmed_at IS NOT NULL)) LIMIT 1`,
+             AND c.status IN ('APPROVED', 'PENDING_REVISION') AND c.installation_confirmed_at IS NOT NULL)) LIMIT 1`,
       [deviceId, req.user!.userId]
     );
     if (!access.rows.length) return res.status(404).json({ success: false, error: 'Meter not found in your account.' });
