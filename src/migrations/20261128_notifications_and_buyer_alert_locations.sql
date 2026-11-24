@@ -38,7 +38,7 @@ BEGIN
     VALUES (
       owner_user_id, 'CONNECTION_REQUEST', 'New connection request',
       'A buyer has requested a connection to your energy source.',
-      '/marketplace/seller?connectionId=' || NEW.id, NEW.id
+      '/connections?connectionId=' || NEW.id, NEW.id
     );
   END IF;
   RETURN NEW;
