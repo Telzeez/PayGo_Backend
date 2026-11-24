@@ -30,13 +30,17 @@ router.post('/paystack', async (req: Request, res: Response) => {
       const buyerEmail = transaction.customer?.email;
       const amountPaid = transaction.amount / 100;
       const deviceId = transaction.metadata?.deviceId || transaction.metadata?.deviceid;
+      const rawMarketplacePurchaseId = transaction.metadata?.marketplacePurchaseId;
+      const marketplacePurchaseId = rawMarketplacePurchaseId === undefined
+        ? undefined : Number(rawMarketplacePurchaseId);
 
       if (!reference || !buyerEmail || !deviceId ||
-          !Number.isFinite(amountPaid) || amountPaid <= 0) {
+          !Number.isFinite(amountPaid) || amountPaid <= 0 ||
+          (rawMarketplacePurchaseId !== undefined && (!Number.isInteger(marketplacePurchaseId) || marketplacePurchaseId! <= 0))) {
         return res.status(400).send('Invalid payment event');
       }
 
-      await processSuccessfulPayment(reference, buyerEmail, amountPaid, deviceId);
+      await processSuccessfulPayment(reference, buyerEmail, amountPaid, deviceId, marketplacePurchaseId);
       return res.status(200).send('Webhook processed');
     }
 
