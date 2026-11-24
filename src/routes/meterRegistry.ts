@@ -214,6 +214,55 @@ router.get('/me', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// Lightweight live dashboard endpoint. Keeps balance/status sync fast by skipping history queries.
+router.get('/:deviceId/summary', async (req: AuthenticatedRequest, res: Response) => {
+  const deviceId = String(req.params.deviceId || '').trim();
+  if (!validDeviceId(deviceId)) return res.status(400).json({ success: false, error: 'Invalid meter ID.' });
+
+  try {
+    const result = await pool.query(
+      `SELECT d.device_id AS "deviceId", d.status,
+              d.current_balance AS balance, d.last_seen_at AS "lastSeenAt",
+              d.last_updated AS "lastUpdated",
+              EXISTS (
+                SELECT 1 FROM customer_connections c
+                JOIN energy_sources s ON s.id = c.source_id
+                WHERE s.device_id = d.device_id AND c.customer_id = $2
+                  AND c.status IN ('APPROVED', 'PENDING_REVISION')
+                  AND c.installation_confirmed_at IS NOT NULL
+              ) AS "isAssignedBuyer"
+       FROM devices d
+       WHERE d.device_id = $1
+         AND (d.owner_id = $2 OR EXISTS (
+           SELECT 1 FROM customer_connections c
+           JOIN energy_sources s ON s.id = c.source_id
+           WHERE s.device_id = d.device_id AND c.customer_id = $2
+             AND c.status IN ('APPROVED', 'PENDING_REVISION')
+             AND c.installation_confirmed_at IS NOT NULL
+         ))
+       LIMIT 1`,
+      [deviceId, req.user!.userId]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, error: 'Meter not found in your account.' });
+    }
+
+    const meter = result.rows[0];
+    return res.setHeader('Cache-Control', 'no-store').json({
+      success: true,
+      meter: {
+        ...meter,
+        balance: Number(meter.balance || 0),
+        status: getEffectiveDeviceStatus(meter.status, meter.lastSeenAt),
+      },
+    });
+  } catch (error) {
+    console.error('Meter summary error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to synchronise meter status.' });
+  }
+});
+
 // Shared detail endpoint, scoped to the prosumer or assigned buyer.
 router.get('/:deviceId', async (req: AuthenticatedRequest, res: Response) => {
   const deviceId = String(req.params.deviceId || '').trim();
