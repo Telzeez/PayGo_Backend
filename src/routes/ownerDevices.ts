@@ -131,16 +131,19 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
     console.warn('Meter activation email delivery failed after provisioning:', error?.message || 'Unknown email delivery error');
   }
 
+  res.setHeader('Cache-Control', 'no-store');
   return res.status(201).json({
     success: true,
     deviceId,
     ownerId,
     activationEmailSent,
+    // Temporary admin-only recovery display: returned only when email delivery fails.
+    activationCode: activationEmailSent ? null : rawCode,
     expiresInHours: 72,
     connectionId,
     message: activationEmailSent
       ? 'Meter assigned. A one-time activation code has been sent to the verified email address on the owner account.'
-      : 'Meter assigned successfully, but the activation email could not be sent. Fix email delivery and use Resend activation code to generate and email a fresh code.',
+      : 'Meter assigned successfully, but the activation email could not be sent. The activation code is displayed below for manual activation.',
   });
 });
 
@@ -213,14 +216,17 @@ router.post('/:deviceId/resend-activation', async (req: AuthenticatedRequest, re
     console.warn('Meter activation email resend failed:', error?.message || 'Unknown email delivery error');
   }
 
+  res.setHeader('Cache-Control', 'no-store');
   return res.json({
     success: true,
     deviceId,
     activationEmailSent,
+    // Temporary admin-only recovery display: returned only when email delivery fails.
+    activationCode: activationEmailSent ? null : rawCode,
     expiresInHours: 72,
     message: activationEmailSent
       ? 'A fresh one-time activation code has been emailed. Any previous unused code is now invalid.'
-      : 'A fresh code was generated and the previous code was invalidated, but email delivery failed. Fix email delivery and retry.',
+      : 'A fresh code was generated and the previous code was invalidated. The new activation code is displayed below for manual activation.',
   });
 });
 
