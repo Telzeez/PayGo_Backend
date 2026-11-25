@@ -37,6 +37,8 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
   }
 
   const client = await pool.connect();
+  let rawCode = '';
+  let recipientEmail = '';
   try {
     await client.query('BEGIN');
     const user = await client.query('SELECT id, email, email_verified FROM users WHERE id = $1', [ownerId]);
@@ -79,7 +81,7 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
       return res.status(409).json({ success: false, error: 'Meter has already been activated.' });
     }
 
-    const rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
+    rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
     const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
     await client.query(
       `UPDATE devices SET owner_id = $2, assignment_status = 'ASSIGNED', assigned_at = NOW(), meter_purpose = $3
@@ -109,17 +111,9 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
        VALUES ($1, $2, $3, NOW() + INTERVAL '72 hours', $4)`,
       [deviceId, ownerId, codeHash, req.user.userId]
     );
-    await sendMeterActivationEmail(user.rows[0].email, deviceId, rawCode);
+    recipientEmail = user.rows[0].email;
+    // The assignment and hashed code are durable before attempting external email delivery.
     await client.query('COMMIT');
-    return res.status(201).json({
-      success: true,
-      deviceId,
-      ownerId,
-      activationEmailSent: true,
-      expiresInHours: 72,
-      connectionId,
-      message: 'Meter assigned. A one-time activation code has been sent to the verified email address on the owner account.'
-    });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch (_) {}
     console.error('Meter provisioning error:', error);
@@ -127,6 +121,107 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
   } finally {
     client.release();
   }
+
+  let activationEmailSent = true;
+  try {
+    await sendMeterActivationEmail(recipientEmail, deviceId, rawCode);
+  } catch (error: any) {
+    activationEmailSent = false;
+    // Never log the one-time activation code. The admin can safely generate a new code via resend.
+    console.warn('Meter activation email delivery failed after provisioning:', error?.message || 'Unknown email delivery error');
+  }
+
+  return res.status(201).json({
+    success: true,
+    deviceId,
+    ownerId,
+    activationEmailSent,
+    expiresInHours: 72,
+    connectionId,
+    message: activationEmailSent
+      ? 'Meter assigned. A one-time activation code has been sent to the verified email address on the owner account.'
+      : 'Meter assigned successfully, but the activation email could not be sent. Fix email delivery and use Resend activation code to generate and email a fresh code.',
+  });
+});
+
+// Generate a fresh one-time code for an assigned, not-yet-activated meter.
+// The hashed code is committed before email delivery; email failure never rolls back the assignment.
+router.post('/:deviceId/resend-activation', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.role !== 'ADMIN') {
+    return res.status(403).json({ success: false, error: 'Administrator access required.' });
+  }
+
+  const deviceId = String(req.params.deviceId || '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId)) {
+    return res.status(400).json({ success: false, error: 'Invalid meter ID.' });
+  }
+
+  const client = await pool.connect();
+  let rawCode = '';
+  let recipientEmail = '';
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT d.owner_id, d.assignment_status, u.email, u.email_verified
+       FROM devices d
+       JOIN users u ON u.id = d.owner_id
+       WHERE d.device_id = $1
+       FOR UPDATE OF d`,
+      [deviceId]
+    );
+    if (!result.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Assigned meter or owner account was not found.' });
+    }
+    const meter = result.rows[0];
+    if (meter.assignment_status !== 'ASSIGNED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Only an assigned, not-yet-activated meter can receive a new activation code.' });
+    }
+    if (!meter.email_verified) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'The owner must verify their email before an activation code can be sent.' });
+    }
+
+    rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
+    const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
+    await client.query(
+      `UPDATE device_activation_codes SET used_at = NOW()
+       WHERE device_id = $1 AND owner_id = $2 AND used_at IS NULL`,
+      [deviceId, meter.owner_id]
+    );
+    await client.query(
+      `INSERT INTO device_activation_codes (device_id, owner_id, code_hash, expires_at, created_by)
+       VALUES ($1, $2, $3, NOW() + INTERVAL '72 hours', $4)`,
+      [deviceId, meter.owner_id, codeHash, req.user.userId]
+    );
+    recipientEmail = meter.email;
+    await client.query('COMMIT');
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Meter activation code regeneration error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to generate a new activation code.' });
+  } finally {
+    client.release();
+  }
+
+  let activationEmailSent = true;
+  try {
+    await sendMeterActivationEmail(recipientEmail, deviceId, rawCode);
+  } catch (error: any) {
+    activationEmailSent = false;
+    console.warn('Meter activation email resend failed:', error?.message || 'Unknown email delivery error');
+  }
+
+  return res.json({
+    success: true,
+    deviceId,
+    activationEmailSent,
+    expiresInHours: 72,
+    message: activationEmailSent
+      ? 'A fresh one-time activation code has been emailed. Any previous unused code is now invalid.'
+      : 'A fresh code was generated and the previous code was invalidated, but email delivery failed. Fix email delivery and retry.',
+  });
 });
 
 
