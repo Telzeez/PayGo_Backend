@@ -147,6 +147,44 @@ router.post('/:deviceId/provision', async (req: AuthenticatedRequest, res: Respo
   });
 });
 
+// Admin-only recovery for an activated meter. Existing hardware credentials and
+// operational history are deliberately left unchanged.
+router.post('/:deviceId/recover-activated', async (req: AuthenticatedRequest, res: Response) => {
+  if (req.user?.role !== 'ADMIN') return res.status(403).json({ success: false, error: 'Administrator access required.' });
+  const deviceId = String(req.params.deviceId || '').trim();
+  const ownerId = Number(req.body?.ownerId);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(deviceId) || !Number.isInteger(ownerId) || ownerId <= 0) return res.status(400).json({ success: false, error: 'A valid meter ID and target account user ID are required.' });
+  const client = await pool.connect();
+  let rawCode = '';
+  let recipientEmail = '';
+  try {
+    await client.query('BEGIN');
+    const user = await client.query('SELECT id, email, email_verified FROM users WHERE id = $1 FOR SHARE', [ownerId]);
+    if (!user.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Target owner account was not found.' }); }
+    if (!user.rows[0].email_verified) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'The target owner must verify their email before meter recovery.' }); }
+    const device = await client.query('SELECT device_id, owner_id, assignment_status FROM devices WHERE device_id = $1 FOR UPDATE', [deviceId]);
+    if (!device.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Meter not found in the PAYGO device registry.' }); }
+    if (device.rows[0].assignment_status !== 'ACTIVATED') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Recovery is only available for an activated meter.' }); }
+    if (Number(device.rows[0].owner_id) === ownerId) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'This meter already belongs to the selected account.' }); }
+    rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
+    const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
+    await client.query('UPDATE device_activation_codes SET used_at = NOW() WHERE device_id = $1 AND used_at IS NULL', [deviceId]);
+    await client.query("UPDATE devices SET owner_id = $2, assignment_status = 'ASSIGNED', assigned_at = NOW(), last_updated = NOW() WHERE device_id = $1", [deviceId, ownerId]);
+    await client.query("INSERT INTO device_activation_codes (device_id, owner_id, code_hash, expires_at, created_by) VALUES ($1, $2, $3, NOW() + INTERVAL '72 hours', $4)", [deviceId, ownerId, codeHash, req.user.userId]);
+    recipientEmail = user.rows[0].email;
+    await client.query('COMMIT');
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Activated meter recovery error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to recover this activated meter.' });
+  } finally { client.release(); }
+  let activationEmailSent = true;
+  try { await sendMeterActivationEmail(recipientEmail, deviceId, rawCode); }
+  catch (error: any) { activationEmailSent = false; console.warn('Recovered meter activation email delivery failed:', error?.message || 'Unknown email delivery error'); }
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  return res.json({ success: true, deviceId, ownerId, activationEmailSent, activationCode: rawCode, expiresInHours: 72, message: activationEmailSent ? 'Meter ownership transferred and a fresh activation code emailed. The code is also displayed here for admin-assisted activation.' : 'Meter ownership transferred. Email delivery failed; use the fresh activation code displayed here.' });
+});
 // Generate a fresh one-time code for an assigned, not-yet-activated meter.
 // The hashed code is committed before email delivery; email failure never rolls back the assignment.
 router.post('/:deviceId/resend-activation', async (req: AuthenticatedRequest, res: Response) => {
