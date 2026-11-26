@@ -44,9 +44,9 @@ router.get('/:deviceId', authenticateToken, requireAdmin, async (req: Request, r
     const lastSeenAt = balanceResult.rows[0].last_seen_at;
     const lastUpdated = balanceResult.rows[0].last_updated;
 
-    // A meter heartbeats every five seconds. Allow for HTTPS latency and the
-    // sequential balance-sync request before declaring it offline.
-    const HEARTBEAT_TTL_MS = 30_000;
+    // A meter heartbeats every five seconds. Allow three missed heartbeats plus
+    // network latency before declaring it offline.
+    const HEARTBEAT_TTL_MS = 15_000;
     let status = rawStatus;
     if (rawStatus === 'ONLINE') {
       const msAgo = lastSeenAt
