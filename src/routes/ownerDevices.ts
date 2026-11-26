@@ -8,7 +8,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // Keep owner-facing status consistent with the device heartbeat endpoint.
-const HEARTBEAT_TTL_MS = 30_000;
+const HEARTBEAT_TTL_MS = 15_000;
 function getEffectiveDeviceStatus(
   status: string | null | undefined,
   lastSeenAt: string | Date | null | undefined
