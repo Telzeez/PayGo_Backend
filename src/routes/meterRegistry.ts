@@ -10,7 +10,7 @@ const validDeviceId = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$/.test(value.trim());
 
 // Match the owner dashboard's heartbeat freshness rule for both owned and buyer-linked meters.
-const HEARTBEAT_TTL_MS = 30_000;
+const HEARTBEAT_TTL_MS = 5_000;
 function getEffectiveDeviceStatus(status: string | null | undefined, lastSeenAt: string | Date | null | undefined): 'ONLINE' | 'OFFLINE' {
   if (status !== 'ONLINE' || !lastSeenAt) return 'OFFLINE';
   const lastSeenMs = new Date(lastSeenAt).getTime();
